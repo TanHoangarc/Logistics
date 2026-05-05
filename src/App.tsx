@@ -1353,14 +1353,32 @@ const CashBookView = ({
   };
 
   const handleImportExcel = (data: any[], fileName: string) => {
-    const newTransactions: Omit<CashTransaction, 'id' | 'voucherNumber'>[] = data.map(item => ({
-      date: item['Ngày (YYYY-MM-DD)'] || new Date().toISOString().split('T')[0],
-      description: item['Diễn giải'] || 'Import from Excel',
-      person: item['Đối tượng'] || '-',
-      amount: Number(item['Số tiền']) || 0,
-      type: (item['Loại (Thu/Chi)']?.toLowerCase() === 'thu' || item['Loại (Thu/Chi)']?.toLowerCase() === 'receipt') ? 'receipt' : 'payment'
-    }));
+    const newTransactions: Omit<CashTransaction, 'id' | 'voucherNumber'>[] = data.map(item => {
+      // Handle Date: Expects DD/MM/YYYY or YYYY-MM-DD
+      let dateVal = item['Ngày'] || item['Ngày (YYYY-MM-DD)'] || new Date().toISOString().split('T')[0];
+      if (typeof dateVal === 'string' && dateVal.includes('/')) {
+        const parts = dateVal.split('/');
+        if (parts.length === 3) {
+          // Convert DD/MM/YYYY to YYYY-MM-DD
+          dateVal = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+        }
+      }
 
+      const thu = Number(item['Thu']) || 0;
+      const chi = Number(item['Chi']) || 0;
+      const amount = thu > 0 ? thu : chi;
+      const type = thu > 0 ? 'receipt' : 'payment';
+
+      return {
+        date: dateVal,
+        description: item['Diễn giải'] || 'Import from Excel',
+        person: item['Đối tượng'] || '-',
+        amount: amount,
+        type: type as 'receipt' | 'payment'
+      };
+    });
+
+    // Bulk add transactions
     newTransactions.forEach(t => onAddTransaction(t));
     
     setImportHistory(prev => [
