@@ -11,7 +11,9 @@ import {
   query, 
   where,
   onSnapshot,
-  getDocFromServer
+  getDocFromServer,
+  addDoc, /**** ADDED ****/
+  serverTimestamp /**** ADDED ****/
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
