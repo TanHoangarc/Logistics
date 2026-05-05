@@ -561,22 +561,72 @@ export default function App() {
     }
   };
 
-  const handleAddCashTransaction = (t: Omit<CashTransaction, 'id' | 'voucherNumber'>) => {
-    let vn = '';
-    if (t.type === 'receipt') {
-      vn = `PT${String(receiptCount + 1).padStart(5, '0')}`;
-      setReceiptCount(prev => prev + 1);
-    } else {
-      vn = `PC${String(paymentCount + 1).padStart(5, '0')}`;
-      setPaymentCount(prev => prev + 1);
-    }
-    
-    const newTx: CashTransaction = {
-      id: Math.random().toString(36).substring(2, 9),
-      voucherNumber: vn,
-      ...t
-    };
-    setCashTransactions([...cashTransactions, newTx]);
+  const handleAddCashTransaction = (t: Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string }) => {
+    setCashTransactions(prev => {
+      let vn = t.voucherNumber;
+      if (!vn) {
+        if (t.type === 'receipt') {
+          // Find latest PT number in prev
+          const receipts = prev.filter(tx => tx.type === 'receipt');
+          let maxNum = 0;
+          receipts.forEach(r => {
+            const m = r.voucherNumber.match(/PT(\d+)/);
+            if (m) maxNum = Math.max(maxNum, parseInt(m[1]));
+          });
+          vn = `PT${String(maxNum + 1).padStart(5, '0')}`;
+        } else {
+          const payments = prev.filter(tx => tx.type === 'payment');
+          let maxNum = 0;
+          payments.forEach(p => {
+            const m = p.voucherNumber.match(/PC(\d+)/);
+            if (m) maxNum = Math.max(maxNum, parseInt(m[1]));
+          });
+          vn = `PC${String(maxNum + 1).padStart(5, '0')}`;
+        }
+      }
+      
+      const newTx: CashTransaction = {
+        id: Math.random().toString(36).substring(2, 9),
+        voucherNumber: vn!,
+        ...t
+      };
+      return [...prev, newTx];
+    });
+  };
+
+  const handleBulkAddCashTransactions = (batch: (Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string })[]) => {
+    setCashTransactions(prev => {
+      let currentTransactions = [...prev];
+      batch.forEach(t => {
+        let vn = t.voucherNumber;
+        if (!vn) {
+          if (t.type === 'receipt') {
+            const receipts = currentTransactions.filter(tx => tx.type === 'receipt');
+            let maxNum = 0;
+            receipts.forEach(r => {
+              const m = r.voucherNumber.match(/PT(\d+)/);
+              if (m) maxNum = Math.max(maxNum, parseInt(m[1]));
+            });
+            vn = `PT${String(maxNum + 1).padStart(5, '0')}`;
+          } else {
+            const payments = currentTransactions.filter(tx => tx.type === 'payment');
+            let maxNum = 0;
+            payments.forEach(p => {
+              const m = p.voucherNumber.match(/PC(\d+)/);
+              if (m) maxNum = Math.max(maxNum, parseInt(m[1]));
+            });
+            vn = `PC${String(maxNum + 1).padStart(5, '0')}`;
+          }
+        }
+        
+        currentTransactions.push({
+          id: Math.random().toString(36).substring(2, 9),
+          voucherNumber: vn!,
+          ...t
+        } as CashTransaction);
+      });
+      return currentTransactions;
+    });
   };
 
   const handleEditCashTransaction = (t: CashTransaction) => {
@@ -613,6 +663,7 @@ export default function App() {
               transactions={cashTransactions}
               initialBalance={initialBalance}
               onAddTransaction={handleAddCashTransaction}
+              onBulkAddTransactions={handleBulkAddCashTransactions}
               onEditTransaction={handleEditCashTransaction}
               onDeleteTransaction={handleDeleteCashTransaction}
               onUpdateInitialBalance={setInitialBalance}
@@ -623,6 +674,7 @@ export default function App() {
               transactions={cashTransactions}
               initialBalance={initialBalance}
               onAddTransaction={handleAddCashTransaction}
+              onBulkAddTransactions={handleBulkAddCashTransactions}
               onEditTransaction={handleEditCashTransaction}
               onDeleteTransaction={handleDeleteCashTransaction}
               onUpdateInitialBalance={setInitialBalance}
@@ -937,13 +989,19 @@ const SendExpenseModal = ({
 
           <div className="space-y-1.5">
             <label className="text-xs font-bold text-slate-500 uppercase">Số tiền (VNĐ)</label>
-            <input 
-              type="number" 
-              placeholder="0.000"
-              value={formData.amount}
-              onChange={(e) => setFormData({...formData, amount: e.target.value})}
-              className="w-full bg-white border border-slate-200 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-[#00875A]/20 focus:border-[#00875A] outline-none transition-all"
-            />
+            <div className="relative">
+              <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
+              <input 
+                type="text" 
+                placeholder="0.000"
+                value={new Intl.NumberFormat('vi-VN').format(Number(formData.amount) || 0)}
+                onChange={(e) => {
+                  const val = e.target.value.replace(/\D/g, '');
+                  setFormData({...formData, amount: val});
+                }}
+                className="w-full bg-white border border-slate-200 rounded-lg py-2.5 pl-10 pr-4 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-[#00875A]/20 focus:border-[#00875A] outline-none transition-all"
+              />
+            </div>
           </div>
 
           <div className="space-y-1.5">
@@ -1266,13 +1324,15 @@ const CashBookView = ({
   transactions,
   initialBalance,
   onAddTransaction,
+  onBulkAddTransactions,
   onEditTransaction,
   onDeleteTransaction,
   onUpdateInitialBalance
 }: {
   transactions: CashTransaction[];
   initialBalance: InitialBalanceInfo;
-  onAddTransaction: (t: Omit<CashTransaction, 'id' | 'voucherNumber'>) => void;
+  onAddTransaction: (t: Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string }) => void;
+  onBulkAddTransactions: (batch: (Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string })[]) => void;
   onEditTransaction: (t: CashTransaction) => void;
   onDeleteTransaction: (id: string) => void;
   onUpdateInitialBalance: (b: InitialBalanceInfo) => void;
@@ -1298,24 +1358,49 @@ const CashBookView = ({
     person: ''
   });
 
-  const handleOpenModal = (item?: CashTransaction) => {
-    if (item) {
+  const handleOpenModal = (typeOrItem?: 'receipt' | 'payment' | CashTransaction) => {
+    if (typeof typeOrItem === 'object') {
+      const item = typeOrItem;
       setEditItem(item);
       setFormData({
         date: item.date,
         description: item.description,
         type: item.type,
         amount: item.amount,
-        person: item.person
+        person: item.person,
+        voucherNumber: item.voucherNumber
       });
     } else {
+      const type = typeOrItem || 'receipt';
       setEditItem(undefined);
+      
+      // Auto-generate voucher number for display
+      let nextVn = '';
+      if (type === 'receipt') {
+        const receipts = transactions.filter(tx => tx.type === 'receipt');
+        let maxNum = 0;
+        receipts.forEach(r => {
+          const m = r.voucherNumber.match(/PT(\d+)/);
+          if (m) maxNum = Math.max(maxNum, parseInt(m[1]));
+        });
+        nextVn = `PT${String(maxNum + 1).padStart(5, '0')}`;
+      } else {
+        const payments = transactions.filter(tx => tx.type === 'payment');
+        let maxNum = 0;
+        payments.forEach(p => {
+          const m = p.voucherNumber.match(/PC(\d+)/);
+          if (m) maxNum = Math.max(maxNum, parseInt(m[1]));
+        });
+        nextVn = `PC${String(maxNum + 1).padStart(5, '0')}`;
+      }
+
       setFormData({
         date: new Date().toISOString().split('T')[0],
         description: '',
-        type: 'receipt',
+        type: type,
         amount: 0,
-        person: ''
+        person: '',
+        voucherNumber: nextVn
       });
     }
     setIsModalOpen(true);
@@ -1353,14 +1438,18 @@ const CashBookView = ({
   };
 
   const handleImportExcel = (data: any[], fileName: string) => {
-    const newTransactions: Omit<CashTransaction, 'id' | 'voucherNumber'>[] = data.map(item => {
+    const isV3Template = data[0] && (data[0]['Ngày'] !== undefined);
+
+    const batch = data.map(item => {
       // Handle Date: Expects DD/MM/YYYY or YYYY-MM-DD
       let dateVal = item['Ngày'] || item['Ngày (YYYY-MM-DD)'] || new Date().toISOString().split('T')[0];
       if (typeof dateVal === 'string' && dateVal.includes('/')) {
         const parts = dateVal.split('/');
         if (parts.length === 3) {
           // Convert DD/MM/YYYY to YYYY-MM-DD
-          dateVal = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+          if (parts[2].length === 4) {
+             dateVal = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+          }
         }
       }
 
@@ -1368,9 +1457,11 @@ const CashBookView = ({
       const chi = Number(item['Chi']) || 0;
       const amount = thu > 0 ? thu : chi;
       const type = thu > 0 ? 'receipt' : 'payment';
+      const voucherNum = item['Số chứng từ'] || item['Số phiếu'];
 
       return {
         date: dateVal,
+        voucherNumber: voucherNum,
         description: item['Diễn giải'] || 'Import from Excel',
         person: item['Đối tượng'] || '-',
         amount: amount,
@@ -1378,8 +1469,8 @@ const CashBookView = ({
       };
     });
 
-    // Bulk add transactions
-    newTransactions.forEach(t => onAddTransaction(t));
+    // Use bulk add instead of loop
+    onBulkAddTransactions(batch);
     
     setImportHistory(prev => [
       { id: Math.random().toString(36).substring(2, 9), date: new Date().toLocaleString(), fileName, user: 'Hoang Dan' },
@@ -1387,7 +1478,7 @@ const CashBookView = ({
     ]);
     
     setIsImportModalOpen(false);
-    alert(`Đã import thành công ${newTransactions.length} chứng từ.`);
+    alert(`Đã import thành công ${batch.length} chứng từ.`);
   };
 
   const handleExportExcel = () => {
@@ -1497,13 +1588,31 @@ const CashBookView = ({
             <Download size={16} />
             In Sổ (Excel)
           </button>
-          <button 
-            onClick={() => handleOpenModal()}
-            className="bg-[#2563eb] text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm active:scale-95 transition-all hover:bg-blue-700 flex items-center gap-2"
-          >
-            <Plus size={16} />
-            Lập Chứng Từ Mới
-          </button>
+          <div className="relative group">
+            <button 
+              className="bg-[#2563eb] text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm active:scale-95 transition-all hover:bg-blue-700 flex items-center gap-2"
+            >
+              <Plus size={16} />
+              Lập Chứng Từ Mới
+              <ChevronDown size={14} />
+            </button>
+            <div className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 py-2 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-[60]">
+              <button 
+                onClick={() => handleOpenModal('receipt')}
+                className="w-full px-4 py-2.5 text-left text-sm font-bold text-slate-700 hover:bg-emerald-50 hover:text-emerald-600 flex items-center gap-2"
+              >
+                <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                Thu tiền
+              </button>
+              <button 
+                onClick={() => handleOpenModal('payment')}
+                className="w-full px-4 py-2.5 text-left text-sm font-bold text-slate-700 hover:bg-rose-50 hover:text-rose-600 flex items-center gap-2"
+              >
+                <div className="w-2 h-2 rounded-full bg-rose-500"></div>
+                Chi tiền
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1641,43 +1750,53 @@ const CashBookView = ({
         {isModalOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
             <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }} className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden">
-              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-[#2563eb] text-white">
-                <h3 className="text-lg font-bold">{editItem ? 'Sửa chứng từ' : 'Lập chứng từ mới'}</h3>
+              <div className={cn(
+                "p-6 border-b border-slate-100 flex justify-between items-center text-white",
+                formData.type === 'receipt' ? "bg-emerald-600" : "bg-rose-600"
+              )}>
+                <h3 className="text-lg font-bold">{editItem ? 'Sửa chứng từ' : (formData.type === 'receipt' ? 'Thu tiền' : 'Chi tiền')}</h3>
                 <button onClick={() => setIsModalOpen(false)} className="hover:bg-white/20 p-1 rounded-full"><X size={20} /></button>
               </div>
               <div className="p-6 space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-500 uppercase">Loại chứng từ</label>
-                    <select 
-                      value={formData.type} 
-                      onChange={e => setFormData({ ...formData, type: e.target.value as any })}
-                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                    >
-                      <option value="receipt">Thu tiền (Nợ)</option>
-                      <option value="payment">Chi tiền (Có)</option>
-                    </select>
+                    <label className="text-xs font-bold text-slate-500 uppercase">Số phiếu</label>
+                    <input 
+                      type="text" 
+                      value={formData.voucherNumber || ''} 
+                      readOnly
+                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 px-4 text-sm font-bold text-slate-500 outline-none cursor-not-allowed" 
+                    />
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-xs font-bold text-slate-500 uppercase">Ngày chứng từ</label>
-                    <input 
-                      type="date" 
-                      value={formData.date} 
-                      onChange={e => setFormData({ ...formData, date: e.target.value })}
-                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
-                    />
+                    <div className="relative">
+                      <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
+                      <input 
+                        type="date" 
+                        value={formData.date} 
+                        onChange={e => setFormData({ ...formData, date: e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
+                      />
+                    </div>
                   </div>
                 </div>
 
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-500 uppercase">Số tiền</label>
-                  <input 
-                    type="number" 
-                    value={formData.amount || ''}
-                    onChange={e => setFormData({ ...formData, amount: Number(e.target.value) })}
-                    placeholder="Nhập số tiền..." 
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
-                  />
+                  <div className="relative">
+                    <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
+                    <input 
+                      type="text" 
+                      value={new Intl.NumberFormat('vi-VN').format(formData.amount || 0)}
+                      onChange={e => {
+                        const val = e.target.value.replace(/\D/g, '');
+                        setFormData({ ...formData, amount: Number(val) });
+                      }}
+                      placeholder="Nhập số tiền..." 
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
+                    />
+                  </div>
                 </div>
 
                 <div className="space-y-1.5">
@@ -1723,21 +1842,30 @@ const CashBookView = ({
               <div className="p-6 space-y-4">
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-500 uppercase">Ngày chốt số dư</label>
-                  <input 
-                    type="date" 
-                    value={settingDate}
-                    onChange={e => setSettingDate(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
-                  />
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
+                    <input 
+                      type="date" 
+                      value={settingDate}
+                      onChange={e => setSettingDate(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
+                    />
+                  </div>
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-500 uppercase">Số dư tiền mặt</label>
-                  <input 
-                    type="number" 
-                    value={settingAmount}
-                    onChange={e => setSettingAmount(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
-                  />
+                  <div className="relative">
+                    <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
+                    <input 
+                      type="text" 
+                      value={new Intl.NumberFormat('vi-VN').format(Number(settingAmount) || 0)}
+                      onChange={e => {
+                        const val = e.target.value.replace(/\D/g, '');
+                        setSettingAmount(val || '0');
+                      }}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
+                    />
+                  </div>
                 </div>
               </div>
               <div className="p-6 bg-slate-50 flex gap-3">
@@ -2235,13 +2363,19 @@ const KimberryView = ({
                   </div>
                   <div className="space-y-1.5 md:col-span-1 col-span-2">
                     <label className="text-xs font-bold text-slate-500 uppercase">Sell</label>
-                    <input 
-                      type="number" 
-                      value={formData.sell || ''}
-                      onChange={e => setFormData({ ...formData, sell: Number(e.target.value) })}
-                      placeholder="Số tiền..." 
-                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
-                    />
+                    <div className="relative">
+                      <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
+                      <input 
+                        type="text" 
+                        value={new Intl.NumberFormat('vi-VN').format(formData.sell || 0)}
+                        onChange={e => {
+                          const val = e.target.value.replace(/\D/g, '');
+                          setFormData({ ...formData, sell: Number(val) });
+                        }}
+                        placeholder="Số tiền..." 
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm font-bold text-slate-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
