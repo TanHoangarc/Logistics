@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() { return request.auth != null; }
+    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    
+    function getUserData(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data;
+    }
+    
+    function hasRole(role) {
+      return isSignedIn() && getUserData(request.auth.uid).role == role;
+    }
+    
+    function isAdmin() { return hasRole('Admin'); }
+    function isManager() { return hasRole('Manager'); }
+    function isStaff() { return hasRole('Accountant'); }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin() || isManager();
+      allow create: if isSignedIn() && userId == request.auth.uid && isValidUser(incoming());
+      allow update: if isSignedIn() && (
+        (userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['username'])) ||
+        (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['role']))
+      );
+    }
+
+    function isValidUser(data) {
+      return data.username is string && data.username.size() <= 100 &&
+             data.role in ['Admin', 'Manager', 'Accountant'];
+    }
+
+    // --- Vouchers Collection ---
+    match /vouchers/{voucherId} {
+      allow read: if isSignedIn();
+      allow create: if isVerified() && isValidVoucher(incoming()) && incoming().createdBy == request.auth.uid;
+      allow update: if isVerified() && isValidVoucher(incoming()) && (
+        (isAdmin() || isManager()) ||
+        (existing().createdBy == request.auth.uid && incoming().createdBy == existing().createdBy)
+      );
+      allow delete: if isAdmin() || isManager();
+    }
+
+    function isValidVoucher(data) {
+      return data.voucherNumber is string && data.voucherNumber.size() <= 50 &&
+             data.createdBy is string && data.createdBy.size() <= 128;
+    }
+  }
+}
