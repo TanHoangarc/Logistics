@@ -41,6 +41,18 @@ service cloud.firestore {
              data.email is string;
     }
 
+    function isValidPayee(data) {
+      return data.keys().hasAll(['name']) &&
+             data.name is string;
+    }
+
+    function isValidDescriptionTemplate(data) {
+      return data.keys().hasAll(['code', 'content', 'type']) &&
+             data.code is string &&
+             data.content is string &&
+             data.type in ['receipt', 'payment', 'both'];
+    }
+
     function isValidCashTransaction(data) {
       return data.keys().hasAll(['date', 'voucherNumber', 'description', 'type', 'amount']) &&
              data.date is string &&
@@ -70,6 +82,16 @@ service cloud.firestore {
     }
 
     match /expenseCategories/{catId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /payees/{payId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /descriptionTemplates/{templateId} {
       allow read: if true;
       allow write: if true;
     }

@@ -54,7 +54,11 @@ import {
   Calendar,
   FileSpreadsheet,
   CloudUpload,
-  History
+  History,
+  MoreHorizontal,
+  Tag,
+  Edit,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -128,6 +132,18 @@ interface Employee {
 interface ExpenseCategory {
   id: string;
   name: string;
+}
+
+interface Payee {
+  id: string;
+  name: string;
+}
+
+interface DescriptionTemplate {
+  id: string;
+  code: string;
+  content: string;
+  type: 'receipt' | 'payment' | 'both';
 }
 
 interface CashTransaction {
@@ -408,6 +424,8 @@ export default function App() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
+  const [payees, setPayees] = useState<Payee[]>([]);
+  const [descriptionTemplates, setDescriptionTemplates] = useState<DescriptionTemplate[]>([]);
   
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [initialBalance, setInitialBalance] = useState<InitialBalanceInfo>({ date: new Date().toISOString().split('T')[0], amount: 0 });
@@ -483,6 +501,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'payees'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Payee));
+      setPayees(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'payees'));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'descriptionTemplates'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as DescriptionTemplate));
+      setDescriptionTemplates(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'descriptionTemplates'));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
     const unsub = onSnapshot(collection(db, 'attendance'), (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord));
       setAttendanceRecords(data);
@@ -493,9 +527,13 @@ export default function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEmpModalOpen, setIsEmpModalOpen] = useState(false);
   const [isCatModalOpen, setIsCatModalOpen] = useState(false);
+  const [isPayeeModalOpen, setIsPayeeModalOpen] = useState(false);
+  const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   
   const [editEmp, setEditEmp] = useState<Employee | undefined>();
   const [editCat, setEditCat] = useState<ExpenseCategory | undefined>();
+  const [editPayee, setEditPayee] = useState<Payee | undefined>();
+  const [editTemplate, setEditTemplate] = useState<DescriptionTemplate | undefined>();
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db, 'config', 'system'), (snapshot) => {
@@ -694,6 +732,52 @@ export default function App() {
     }
   };
 
+  const handleSavePayee = async (data: { name: string }) => {
+    try {
+      if (editPayee) {
+        await updateDoc(doc(db, 'payees', editPayee.id), { name: data.name });
+      } else {
+        await addDoc(collection(db, 'payees'), data);
+      }
+      setIsPayeeModalOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'payees');
+    }
+  };
+
+  const handleDeletePayee = async (id: string) => {
+    if (confirm('Xác nhận xóa người nhận/nộp này?')) {
+      try {
+        await deleteDoc(doc(db, 'payees', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, 'payees');
+      }
+    }
+  };
+
+  const handleSaveTemplate = async (data: { code: string, content: string, type: 'receipt' | 'payment' | 'both' }) => {
+    try {
+      if (editTemplate) {
+        await updateDoc(doc(db, 'descriptionTemplates', editTemplate.id), data);
+      } else {
+        await addDoc(collection(db, 'descriptionTemplates'), data);
+      }
+      setIsTemplateModalOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'descriptionTemplates');
+    }
+  };
+
+  const handleDeleteTemplate = async (id: string) => {
+    if (confirm('Xác nhận xóa mẫu nội dung này?')) {
+      try {
+        await deleteDoc(doc(db, 'descriptionTemplates', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, 'descriptionTemplates');
+      }
+    }
+  };
+
   const handleAddCashTransaction = async (t: Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string }) => {
     try {
       let vn = t.voucherNumber;
@@ -817,6 +901,8 @@ export default function App() {
             <CashBookView 
               transactions={cashTransactions}
               initialBalance={initialBalance}
+              payees={payees}
+              descriptionTemplates={descriptionTemplates}
               onAddTransaction={handleAddCashTransaction}
               onBulkAddTransactions={handleBulkAddCashTransactions}
               onEditTransaction={handleEditCashTransaction}
@@ -828,6 +914,8 @@ export default function App() {
             <CashBookView 
               transactions={cashTransactions}
               initialBalance={initialBalance}
+              payees={payees}
+              descriptionTemplates={descriptionTemplates}
               onAddTransaction={handleAddCashTransaction}
               onBulkAddTransactions={handleBulkAddCashTransactions}
               onEditTransaction={handleEditCashTransaction}
@@ -864,6 +952,22 @@ export default function App() {
               onDelete={handleDeleteEmployee}
             />
           } />
+          <Route path="/hanh-chinh/du-lieu" element={
+            <DataManagementView 
+              expenseCategories={expenseCategories}
+              payees={payees}
+              descriptionTemplates={descriptionTemplates}
+              onAddCategory={() => { setEditCat(undefined); setIsCatModalOpen(true); }}
+              onEditCategory={(c) => { setEditCat(c); setIsCatModalOpen(true); }}
+              onDeleteCategory={handleDeleteCategory}
+              onAddPayee={() => { setEditPayee(undefined); setIsPayeeModalOpen(true); }}
+              onEditPayee={(p) => { setEditPayee(p); setIsPayeeModalOpen(true); }}
+              onDeletePayee={handleDeletePayee}
+              onAddTemplate={() => { setEditTemplate(undefined); setIsTemplateModalOpen(true); }}
+              onEditTemplate={(t) => { setEditTemplate(t); setIsTemplateModalOpen(true); }}
+              onDeleteTemplate={handleDeleteTemplate}
+            />
+          } />
           <Route path="/cong-viec/pricing/freights" element={<FreightsView username={currentUser.username} />} />
           <Route path="/cong-viec/pricing/local-charges" element={<LocalChargesView />} />
           <Route path="/cong-viec/pricing/services" element={<ServicesView />} />
@@ -893,10 +997,157 @@ export default function App() {
           onSave={handleSaveCategory}
           editData={editCat}
         />
+
+        <PayeeModal
+          isOpen={isPayeeModalOpen}
+          onClose={() => setIsPayeeModalOpen(false)}
+          onSave={handleSavePayee}
+          editData={editPayee}
+        />
+
+        <TemplateModal
+          isOpen={isTemplateModalOpen}
+          onClose={() => setIsTemplateModalOpen(false)}
+          onSave={handleSaveTemplate}
+          editData={editTemplate}
+        />
       </Layout>
     </Router>
   );
 }
+
+const PayeeModal = ({
+  isOpen,
+  onClose,
+  onSave,
+  editData
+}: {
+  isOpen: boolean,
+  onClose: () => void,
+  onSave: (data: { name: string }) => void,
+  editData?: Payee
+}) => {
+  const [name, setName] = useState('');
+
+  useEffect(() => {
+    if (editData) setName(editData.name);
+    else setName('');
+  }, [editData, isOpen]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+      <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden">
+        <div className="p-6 border-b border-slate-100 flex justify-between items-center text-slate-800">
+          <h3 className="text-lg font-bold">{editData ? 'Sửa Người nhận/Nộp' : 'Thêm Người nhận/Nộp'}</h3>
+          <button onClick={onClose} className="hover:bg-slate-100 p-1 rounded-full"><X size={20} /></button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-slate-500 uppercase">Họ và tên</label>
+            <input 
+              type="text" 
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="VD: Nguyễn Văn A"
+              className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
+            />
+          </div>
+        </div>
+        <div className="p-6 bg-slate-50 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-600 hover:bg-white transition-all">Hủy</button>
+          <button onClick={() => onSave({ name })} className="flex-1 py-3 rounded-xl bg-blue-600 text-white text-sm font-bold hover:brightness-110 active:scale-95 transition-all">Lưu</button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+const TemplateModal = ({
+  isOpen,
+  onClose,
+  onSave,
+  editData
+}: {
+  isOpen: boolean,
+  onClose: () => void,
+  onSave: (data: { code: string, content: string, type: 'receipt' | 'payment' | 'both' }) => void,
+  editData?: DescriptionTemplate
+}) => {
+  const [formData, setFormData] = useState<{ code: string, content: string, type: 'receipt' | 'payment' | 'both' }>({ 
+    code: '', 
+    content: '', 
+    type: 'both' 
+  });
+
+  useEffect(() => {
+    if (editData) setFormData({ code: editData.code, content: editData.content, type: editData.type || 'both' });
+    else setFormData({ code: '', content: '', type: 'both' });
+  }, [editData, isOpen]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+      <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="bg-white rounded-3xl w-full max-w-sm shadow-2xl overflow-hidden">
+        <div className="p-6 border-b border-slate-100 flex justify-between items-center text-slate-800">
+          <h3 className="text-lg font-bold">{editData ? 'Sửa Mẫu nội dung' : 'Thêm Mẫu nội dung'}</h3>
+          <button onClick={onClose} className="hover:bg-slate-100 p-1 rounded-full"><X size={20} /></button>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-slate-500 uppercase">Loại áp dụng</label>
+            <div className="flex gap-2">
+              {[
+                { id: 'both', label: 'Cả hai' },
+                { id: 'receipt', label: 'Thu tiền' },
+                { id: 'payment', label: 'Chi tiền' }
+              ].map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setFormData({ ...formData, type: t.id as any })}
+                  className={cn(
+                    "flex-1 py-2 rounded-xl text-xs font-bold border transition-all",
+                    formData.type === t.id 
+                      ? "bg-blue-50 border-blue-200 text-blue-600" 
+                      : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
+                  )}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-slate-500 uppercase">Mã / Từ khóa gợi nhớ</label>
+            <input 
+              type="text" 
+              value={formData.code}
+              onChange={e => setFormData({ ...formData, code: e.target.value.toUpperCase() })}
+              placeholder="VD: COM"
+              className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm font-bold focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-slate-500 uppercase">Nội dung mẫu</label>
+            <textarea 
+              rows={3}
+              value={formData.content}
+              onChange={e => setFormData({ ...formData, content: e.target.value })}
+              placeholder="VD: Chi tiền cho COM lô "
+              className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
+            />
+          </div>
+        </div>
+        <div className="p-6 bg-slate-50 flex gap-3">
+          <button onClick={onClose} className="flex-1 py-3 rounded-xl border border-slate-200 text-sm font-bold text-slate-600 hover:bg-white transition-all">Hủy</button>
+          <button onClick={() => onSave(formData)} className="flex-1 py-3 rounded-xl bg-blue-600 text-white text-sm font-bold hover:brightness-110 active:scale-95 transition-all">Lưu</button>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
 
 const Layout = ({ 
   children, 
@@ -978,7 +1229,7 @@ const Layout = ({
           <div className="mt-4">
             <SidebarItem icon={Briefcase} label="Hành chính nhân sự">
               <SidebarItem label="Nhân viên" to="/hanh-chinh/nhan-vien" isActive={location.pathname === "/hanh-chinh/nhan-vien"} />
-              <SidebarItem label="Chi phí" to="/hanh-chinh/chi-phi" isActive={location.pathname === "/hanh-chinh/chi-phi"} />
+              <SidebarItem label="Dữ liệu" to="/hanh-chinh/du-lieu" isActive={location.pathname === "/hanh-chinh/du-lieu"} />
             </SidebarItem>
           </div>
 
@@ -1478,6 +1729,8 @@ const ApprovalView = ({
 const CashBookView = ({
   transactions,
   initialBalance,
+  payees,
+  descriptionTemplates,
   onAddTransaction,
   onBulkAddTransactions,
   onEditTransaction,
@@ -1486,6 +1739,8 @@ const CashBookView = ({
 }: {
   transactions: CashTransaction[];
   initialBalance: InitialBalanceInfo;
+  payees: Payee[];
+  descriptionTemplates: DescriptionTemplate[];
   onAddTransaction: (t: Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string }) => void;
   onBulkAddTransactions: (batch: (Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string })[]) => void;
   onEditTransaction: (t: CashTransaction) => void;
@@ -1640,15 +1895,14 @@ const CashBookView = ({
     // Sort transactions properly before exporting
     const sortedForExport = [...transactions].sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
+      if (a.voucherNumber !== b.voucherNumber) return a.voucherNumber.localeCompare(b.voucherNumber);
       return a.id.localeCompare(b.id);
     });
 
     let runningBal = initialBalance.amount;
     const dataToExport = sortedForExport.map(t => {
-      if (t.date >= initialBalance.date) {
-        if (t.type === 'receipt') runningBal += t.amount;
-        else runningBal -= t.amount;
-      }
+      if (t.type === 'receipt') runningBal += t.amount;
+      else runningBal -= t.amount;
       
       return {
         'Ngày': formatDateDDMMYYYY(t.date),
@@ -1692,18 +1946,17 @@ const CashBookView = ({
   };
 
   // Sort and calculate balance
-  // We should sort transactions by date ascending, then ID ascending to have a stable order
+  // We should sort transactions by date ascending, then Voucher Number, then ID ascending to have a stable order
   const sortedAll = [...transactions].sort((a, b) => {
     if (a.date !== b.date) return a.date.localeCompare(b.date);
+    if (a.voucherNumber !== b.voucherNumber) return (a.voucherNumber || '').localeCompare(b.voucherNumber || '');
     return a.id.localeCompare(b.id);
   });
 
   let runningBalance = initialBalance.amount;
   const processedTransactions = sortedAll.map(t => {
-    if (t.date >= initialBalance.date) {
-        if (t.type === 'receipt') runningBalance += t.amount;
-        else runningBalance -= t.amount;
-    }
+    if (t.type === 'receipt') runningBalance += t.amount;
+    else runningBalance -= t.amount;
     return { ...t, computedBalance: runningBalance };
   });
 
@@ -1716,6 +1969,8 @@ const CashBookView = ({
     if (targetPerson && !t.person.toLowerCase().includes(targetPerson.toLowerCase())) return false;
     return true;
   });
+
+  const displayList = [...filtered].reverse();
 
   return (
     <div className="space-y-6">
@@ -1862,13 +2117,13 @@ const CashBookView = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.length === 0 ? (
+              {displayList.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-6 py-12 text-center text-slate-400 italic font-medium text-sm">
                     Chưa có giao dịch nào được ghi lại
                   </td>
                 </tr>
-              ) : filtered.map((t) => (
+              ) : displayList.map((t) => (
                 <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-6 py-4 text-sm font-medium text-slate-600 whitespace-nowrap">{formatDateDDMMYYYY(t.date)}</td>
                   <td className="px-6 py-4 text-sm font-bold text-slate-800 whitespace-nowrap">{t.voucherNumber}</td>
@@ -1956,24 +2211,66 @@ const CashBookView = ({
 
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-500 uppercase">Diễn giải</label>
-                  <input 
-                    type="text" 
-                    value={formData.description}
-                    onChange={e => setFormData({ ...formData, description: e.target.value })}
-                    placeholder="VD: Thu tiền bán hàng..." 
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
-                  />
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      value={formData.description}
+                      onChange={e => setFormData({ ...formData, description: e.target.value })}
+                      placeholder="VD: Thu tiền bán hàng..." 
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
+                    />
+                    <div className="relative group/tpl">
+                      <button className="shrink-0 bg-slate-100 hover:bg-slate-200 text-slate-600 w-10 h-10 rounded-xl flex items-center justify-center transition-all">
+                        <MoreHorizontal size={18} />
+                      </button>
+                      <div className="absolute right-0 bottom-full mb-2 w-64 bg-white rounded-xl shadow-xl border border-slate-100 py-2 opacity-0 invisible group-hover/tpl:opacity-100 group-hover/tpl:visible transition-all z-[110] max-h-48 overflow-y-auto">
+                        <p className="px-4 py-1 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mẫu nội dung</p>
+                        {descriptionTemplates.filter(t => t.type === 'both' || t.type === formData.type).map(tpl => (
+                          <button
+                            key={tpl.id}
+                            onClick={() => setFormData({ ...formData, description: tpl.content })}
+                            className="w-full px-4 py-2 text-left text-xs font-medium text-slate-600 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                          >
+                            <span className="font-bold mr-2 text-blue-500">[{tpl.code}]</span>
+                            {tpl.content}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="space-y-1.5">
                   <label className="text-xs font-bold text-slate-500 uppercase">Người nhận / Nộp</label>
-                  <input 
-                    type="text" 
+                  <select 
                     value={formData.person}
-                    onChange={e => setFormData({ ...formData, person: e.target.value })}
-                    placeholder="VD: Nguyễn Văn A" 
+                    onChange={e => {
+                      const selectedPerson = e.target.value;
+                      let newDesc = formData.description;
+                      if (selectedPerson && selectedPerson !== 'Khác' && formData.description.includes('Tạm ứng')) {
+                        // Append if the description doesn't already end with the person name to avoid duplicates
+                        if (!newDesc.endsWith(selectedPerson)) {
+                          newDesc = `${newDesc.trim()} ${selectedPerson}`;
+                        }
+                      }
+                      setFormData({ ...formData, person: selectedPerson, description: newDesc });
+                    }}
                     className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
-                  />
+                  >
+                    <option value="">-- Chọn người nhận/nộp --</option>
+                    {payees.map(p => (
+                      <option key={p.id} value={p.name}>{p.name}</option>
+                    ))}
+                    <option value="Khác">Khác / Nhập trực tiếp</option>
+                  </select>
+                  {formData.person === 'Khác' && (
+                    <input 
+                      type="text" 
+                      placeholder="Nhập tên người nhận/nộp..."
+                      className="mt-2 w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
+                      onChange={(e) => setFormData({ ...formData, person: e.target.value })}
+                    />
+                  )}
                 </div>
               </div>
               <div className="p-6 bg-slate-50 flex gap-3">
@@ -2248,6 +2545,170 @@ const ImportExcelModal = ({
           </div>
         </div>
       </motion.div>
+    </div>
+  );
+};
+
+const DataManagementView = ({
+  expenseCategories,
+  payees,
+  descriptionTemplates,
+  onAddCategory,
+  onEditCategory,
+  onDeleteCategory,
+  onAddPayee,
+  onEditPayee,
+  onDeletePayee,
+  onAddTemplate,
+  onEditTemplate,
+  onDeleteTemplate,
+}: {
+  expenseCategories: ExpenseCategory[];
+  payees: Payee[];
+  descriptionTemplates: DescriptionTemplate[];
+  onAddCategory: () => void;
+  onEditCategory: (c: ExpenseCategory) => void;
+  onDeleteCategory: (id: string) => void;
+  onAddPayee: () => void;
+  onEditPayee: (p: Payee) => void;
+  onDeletePayee: (id: string) => void;
+  onAddTemplate: () => void;
+  onEditTemplate: (t: DescriptionTemplate) => void;
+  onDeleteTemplate: (id: string) => void;
+}) => {
+  const [activeTab, setActiveTab] = useState<'categories' | 'payees' | 'templates'>('categories');
+
+  const tabs = [
+    { id: 'categories', label: 'Chi phí', icon: Tag },
+    { id: 'payees', label: 'Người nhận/Nộp', icon: Users },
+    { id: 'templates', label: 'Nội dung mẫu', icon: FileText },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold text-slate-900 italic">Quản lý Dữ liệu</h2>
+        <button 
+          onClick={() => {
+            if (activeTab === 'categories') onAddCategory();
+            if (activeTab === 'payees') onAddPayee();
+            if (activeTab === 'templates') onAddTemplate();
+          }}
+          className="bg-[#2563eb] text-white px-6 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/20 hover:brightness-110 active:scale-95 transition-all flex items-center gap-2"
+        >
+          <Plus size={18} />
+          {activeTab === 'categories' ? 'Thêm Loại chi phí' : activeTab === 'payees' ? 'Thêm Người nhận/Nộp' : 'Thêm Mẫu nội dung'}
+        </button>
+      </div>
+
+      <div className="flex gap-2 p-1 bg-slate-100 rounded-2xl w-fit">
+        {tabs.map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id as any)}
+            className={cn(
+              "px-6 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center gap-2",
+              activeTab === tab.id ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700"
+            )}
+          >
+            <tab.icon size={16} />
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 gap-6">
+        {activeTab === 'categories' && (
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100">
+                  <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tên loại chi phí</th>
+                  <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {expenseCategories.length === 0 ? (
+                  <tr><td colSpan={2} className="px-8 py-12 text-center text-slate-400 italic">Chưa có loại chi phí nào</td></tr>
+                ) : expenseCategories.map(c => (
+                  <tr key={c.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-8 py-4 text-sm font-bold text-slate-700">{c.name}</td>
+                    <td className="px-8 py-4 text-right space-x-2">
+                      <button onClick={() => onEditCategory(c)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit size={16} /></button>
+                      <button onClick={() => onDeleteCategory(c.id)} className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {activeTab === 'payees' && (
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100">
+                  <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tên người nhận/nộp</th>
+                  <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {payees.length === 0 ? (
+                  <tr><td colSpan={2} className="px-8 py-12 text-center text-slate-400 italic">Chưa có người nhận/nộp nào</td></tr>
+                ) : payees.map(p => (
+                  <tr key={p.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-8 py-4 text-sm font-bold text-slate-700">{p.name}</td>
+                    <td className="px-8 py-4 text-right space-x-2">
+                      <button onClick={() => onEditPayee(p)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit size={16} /></button>
+                      <button onClick={() => onDeletePayee(p.id)} className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {activeTab === 'templates' && (
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100">
+                  <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Loại</th>
+                  <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mã/Gợi nhớ</th>
+                  <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nội dung mẫu</th>
+                  <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {descriptionTemplates.length === 0 ? (
+                  <tr><td colSpan={4} className="px-8 py-12 text-center text-slate-400 italic">Chưa có mẫu nội dung nào</td></tr>
+                ) : descriptionTemplates.map(t => (
+                  <tr key={t.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-8 py-4">
+                      <span className={cn(
+                        "text-[10px] font-bold px-2 py-0.5 rounded-full uppercase",
+                        t.type === 'receipt' ? "bg-emerald-50 text-emerald-600" : 
+                        t.type === 'payment' ? "bg-rose-50 text-rose-600" : 
+                        "bg-slate-100 text-slate-600"
+                      )}>
+                        {t.type === 'receipt' ? 'Thu' : t.type === 'payment' ? 'Chi' : 'Cả hai'}
+                      </span>
+                    </td>
+                    <td className="px-8 py-4 text-sm font-bold text-blue-600 uppercase tracking-wider">{t.code}</td>
+                    <td className="px-8 py-4 text-sm text-slate-600 font-medium">{t.content}</td>
+                    <td className="px-8 py-4 text-right space-x-2">
+                      <button onClick={() => onEditTemplate(t)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit size={16} /></button>
+                      <button onClick={() => onDeleteTemplate(t.id)} className="p-2 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

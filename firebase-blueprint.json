@@ -53,6 +53,26 @@
       },
       "required": ["name"]
     },
+    "Payee": {
+      "title": "Payee",
+      "description": "People who receive or pay money",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "DescriptionTemplate": {
+      "title": "DescriptionTemplate",
+      "description": "Predefined description content",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "content": { "type": "string" },
+        "type": { "type": "string", "enum": ["receipt", "payment", "both"] }
+      },
+      "required": ["code", "content", "type"]
+    },
     "CashTransaction": {
       "title": "CashTransaction",
       "description": "Daily cash journal entries",
@@ -146,6 +166,14 @@
     "expenseCategories": {
       "schema": "ExpenseCategory",
       "description": "Manageable list of expense categories"
+    },
+    "payees": {
+      "schema": "Payee",
+      "description": "List of people for transactions"
+    },
+    "descriptionTemplates": {
+      "schema": "DescriptionTemplate",
+      "description": "Shortcuts for transaction descriptions"
     },
     "cashTransactions": {
       "schema": "CashTransaction",
