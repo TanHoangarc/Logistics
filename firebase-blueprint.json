@@ -1,37 +1,175 @@
 {
   "entities": {
-    "User": {
-      "title": "User",
-      "description": "User profile and role information",
+    "Activity": {
+      "title": "Activity",
+      "description": "Log of recent activities in the system",
       "type": "object",
       "properties": {
-        "username": { "type": "string" },
-        "role": { "type": "string", "enum": ["Admin", "Manager", "Accountant"] },
-        "email": { "type": "string", "format": "email" }
+        "timestamp": { "type": "string", "format": "date-time" },
+        "content": { "type": "string" },
+        "type": { "type": "string", "enum": ["submit", "approve", "settle", "other"] }
       },
-      "required": ["username", "role"]
+      "required": ["timestamp", "content", "type"]
     },
-    "Voucher": {
-      "title": "Voucher",
-      "description": "Shipping vouchers or price records",
+    "Expense": {
+      "title": "Expense",
+      "description": "Expense records for approval and settlement",
       "type": "object",
       "properties": {
-        "voucherNumber": { "type": "string" },
-        "data": { "type": "object" },
-        "createdBy": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "date": { "type": "string", "format": "date" },
+        "type": { "type": "string" },
+        "amount": { "type": "number" },
+        "submitter": { "type": "string" },
+        "invoiceFile": { "type": "string" },
+        "isApproved": { "type": "boolean" },
+        "isSettled": { "type": "boolean" }
       },
-      "required": ["voucherNumber", "createdBy"]
+      "required": ["date", "type", "amount", "submitter", "isApproved", "isSettled"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "Employee directory",
+      "type": "object",
+      "properties": {
+        "fullName": { "type": "string" },
+        "position": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "line": { "type": "string" },
+        "accountNumber": { "type": "string" },
+        "bankName": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "role": { "type": "string" }
+      },
+      "required": ["fullName", "position", "name", "email"]
+    },
+    "ExpenseCategory": {
+      "title": "ExpenseCategory",
+      "description": "Categories for expenses",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "CashTransaction": {
+      "title": "CashTransaction",
+      "description": "Daily cash journal entries",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "format": "date" },
+        "voucherNumber": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string", "enum": ["receipt", "payment"] },
+        "amount": { "type": "number" },
+        "person": { "type": "string" }
+      },
+      "required": ["date", "voucherNumber", "description", "type", "amount"]
+    },
+    "KimberryJob": {
+      "title": "KimberryJob",
+      "description": "Freight and logistics jobs",
+      "type": "object",
+      "properties": {
+        "monthYear": { "type": "string" },
+        "job": { "type": "string" },
+        "booking": { "type": "string" },
+        "hbl": { "type": "string" },
+        "line": { "type": "string" },
+        "cont20": { "type": "number" },
+        "cont40": { "type": "number" },
+        "sell": { "type": "number" }
+      },
+      "required": ["monthYear", "job", "sell"]
+    },
+    "BankTransaction": {
+      "title": "BankTransaction",
+      "description": "Bank ledger entries",
+      "type": "object",
+      "properties": {
+        "bank": { "type": "string", "enum": ["TCB", "MB"] },
+        "date": { "type": "string", "format": "date" },
+        "amount": { "type": "number" },
+        "description": { "type": "string" }
+      },
+      "required": ["bank", "date", "amount"]
+    },
+    "VatRecord": {
+      "title": "VatRecord",
+      "description": "VAT collection records",
+      "type": "object",
+      "properties": {
+        "monthYear": { "type": "string" },
+        "amount": { "type": "number" }
+      },
+      "required": ["monthYear", "amount"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Daily attendance logs",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "checkIn": { "type": "string" },
+        "checkOut": { "type": "string" },
+        "status": { "type": "string" },
+        "note": { "type": "string" },
+        "attachedFile": { "type": "string" }
+      },
+      "required": ["employeeId", "date"]
+    },
+    "SystemConfig": {
+      "title": "SystemConfig",
+      "description": "Global system settings",
+      "type": "object",
+      "properties": {
+        "initialBalanceDate": { "type": "string", "format": "date" },
+        "initialBalanceAmount": { "type": "number" }
+      }
     }
   },
   "firestore": {
-    "/users/{userId}": {
-      "schema": "User",
-      "description": "Registered users in the system"
+    "activities": {
+      "schema": "Activity",
+      "description": "Global activity logs"
     },
-    "/vouchers/{voucherId}": {
-      "schema": "Voucher",
-      "description": "Vouchers/Invoices created by users"
+    "expenses": {
+      "schema": "Expense",
+      "description": "All expense settlement requests"
+    },
+    "employees": {
+      "schema": "Employee",
+      "description": "Employee profile data"
+    },
+    "expenseCategories": {
+      "schema": "ExpenseCategory",
+      "description": "Manageable list of expense categories"
+    },
+    "cashTransactions": {
+      "schema": "CashTransaction",
+      "description": "The daily cash book journal"
+    },
+    "kimberryJobs": {
+      "schema": "KimberryJob",
+      "description": "Logistics operations jobs"
+    },
+    "bankTransactions": {
+      "schema": "BankTransaction",
+      "description": "Bank ledger for multiple banks"
+    },
+    "vatRecords": {
+      "schema": "VatRecord",
+      "description": "VAT tracking records"
+    },
+    "attendance": {
+      "schema": "AttendanceRecord",
+      "description": "Time tracking and attendance"
+    },
+    "config/system": {
+      "schema": "SystemConfig",
+      "description": "Global parameters like initial balances"
     }
   }
 }

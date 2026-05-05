@@ -1,0 +1,109 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Validation Helpers
+    function isValidActivity(data) {
+      return data.keys().hasAll(['timestamp', 'content', 'type']) &&
+             data.timestamp is string &&
+             data.content is string && data.content.size() <= 5000 &&
+             data.type in ['submit', 'approve', 'settle', 'other'];
+    }
+
+    function isValidExpense(data) {
+      return data.keys().hasAll(['date', 'type', 'amount', 'submitter', 'isApproved', 'isSettled']) &&
+             data.date is string &&
+             data.type is string &&
+             data.amount is number &&
+             data.submitter is string &&
+             data.isApproved is bool &&
+             data.isSettled is bool;
+    }
+
+    function isValidEmployee(data) {
+      return data.keys().hasAll(['fullName', 'position', 'name', 'email']) &&
+             data.fullName is string &&
+             data.position is string &&
+             data.name is string &&
+             data.email is string;
+    }
+
+    function isValidCashTransaction(data) {
+      return data.keys().hasAll(['date', 'voucherNumber', 'description', 'type', 'amount']) &&
+             data.date is string &&
+             data.voucherNumber is string &&
+             data.description is string &&
+             data.type in ['receipt', 'payment'] &&
+             data.amount is number;
+    }
+
+    // Rules for collections
+    match /activities/{activityId} {
+      allow read: if true; // Allow public read for now or change to isSignedIn() if auth is enforced
+      allow create: if isValidActivity(request.resource.data);
+      allow update, delete: if false;
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if true;
+      allow create: if isValidExpense(request.resource.data);
+      allow update: if isValidExpense(request.resource.data);
+      allow delete: if true;
+    }
+
+    match /employees/{employeeId} {
+      allow read: if true;
+      allow write: if true; // Simple for now, could be hardened
+    }
+
+    match /expenseCategories/{catId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /cashTransactions/{txId} {
+      allow read: if true;
+      allow create: if isValidCashTransaction(request.resource.data);
+      allow update: if isValidCashTransaction(request.resource.data);
+      allow delete: if true;
+    }
+
+    match /kimberryJobs/{jobId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /bankTransactions/{txId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /vatRecords/{recId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /attendance/{recId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if true;
+    }
+  }
+}

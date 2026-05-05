@@ -166,6 +166,7 @@ interface BankTransaction {
 }
 
 interface VatRecord {
+  id?: string;
   monthYear: string;
   amount: number;
 }
@@ -404,10 +405,9 @@ const Login = ({ onLogin }: { onLogin: (user: { username: string, role: UserRole
 export default function App() {
   const [currentUser, setCurrentUser] = useState<{ username: string, role: UserRole } | null>(null);
 
-  // States moved from old App
-  const [expenses, setExpenses] = useState<Expense[]>(INITIAL_EXPENSES);
-  const [employees, setEmployees] = useState<Employee[]>(INITIAL_EMPLOYEES);
-  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>(INITIAL_EXPENSE_CATEGORIES);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
   const [initialBalance, setInitialBalance] = useState<InitialBalanceInfo>({ date: new Date().toISOString().split('T')[0], amount: 0 });
@@ -417,6 +417,79 @@ export default function App() {
   const [attendanceRecords, setAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [activities, setActivities] = useState<Activity[]>([]);
 
+  // --- Real-time Sync Hooks ---
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'activities'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Activity));
+      setActivities(data.sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 50));
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'activities'));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'expenses'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Expense));
+      setExpenses(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'expenses'));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'employees'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Employee));
+      setEmployees(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'employees'));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'expenseCategories'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as ExpenseCategory));
+      setExpenseCategories(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'expenseCategories'));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'cashTransactions'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as CashTransaction));
+      setCashTransactions(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'cashTransactions'));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'kimberryJobs'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as KimberryJob));
+      setKimberryJobs(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'kimberryJobs'));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'bankTransactions'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as BankTransaction));
+      setBankTransactions(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'bankTransactions'));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'vatRecords'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as VatRecord));
+      setVatRecords(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'vatRecords'));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'attendance'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AttendanceRecord));
+      setAttendanceRecords(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'attendance'));
+    return () => unsub();
+  }, []);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEmpModalOpen, setIsEmpModalOpen] = useState(false);
   const [isCatModalOpen, setIsCatModalOpen] = useState(false);
@@ -424,150 +497,209 @@ export default function App() {
   const [editEmp, setEditEmp] = useState<Employee | undefined>();
   const [editCat, setEditCat] = useState<ExpenseCategory | undefined>();
 
-  const [receiptCount, setReceiptCount] = useState(0);
-  const [paymentCount, setPaymentCount] = useState(0);
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, 'config', 'system'), (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.data();
+        setInitialBalance({ 
+          date: data.initialBalanceDate || new Date().toISOString().split('T')[0], 
+          amount: data.initialBalanceAmount || 0 
+        });
+      }
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'config/system'));
+    return () => unsub();
+  }, []);
 
-  const addActivity = (content: string, type: 'submit' | 'approve' | 'settle' | 'other') => {
-    setActivities(prev => {
-      const newActivities = [
-        { id: Math.random().toString(36).substring(2, 9), timestamp: new Date().toISOString(), content, type },
-        ...prev
-      ];
-      return newActivities.slice(0, 20);
-    });
-  };
-
-  const handleUpdateAttendance = (record: AttendanceRecord) => {
-    const existingIndex = attendanceRecords.findIndex(r => r.employeeId === record.employeeId && r.date === record.date);
-    if (existingIndex >= 0) {
-      const newRecords = [...attendanceRecords];
-      newRecords[existingIndex] = record;
-      setAttendanceRecords(newRecords);
-    } else {
-      setAttendanceRecords([...attendanceRecords, record]);
+  const addActivity = async (content: string, type: 'submit' | 'approve' | 'settle' | 'other') => {
+    try {
+      await addDoc(collection(db, 'activities'), {
+        timestamp: new Date().toISOString(),
+        content,
+        type
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'activities');
     }
   };
 
-  const handleAddKimberryJob = (j: Omit<KimberryJob, 'id'>) => {
-    setKimberryJobs([...kimberryJobs, { id: Math.random().toString(36).substring(2, 9), ...j }]);
+  const handleUpdateAttendance = async (record: AttendanceRecord) => {
+    try {
+      const path = 'attendance';
+      if (record.id && attendanceRecords.find(r => r.id === record.id)) {
+        await updateDoc(doc(db, path, record.id), record as any);
+      } else {
+        const { id, ...rest } = record;
+        await addDoc(collection(db, path), rest);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'attendance');
+    }
   };
 
-  const handleEditKimberryJob = (j: KimberryJob) => {
-    setKimberryJobs(kimberryJobs.map(job => job.id === j.id ? j : job));
+  const handleAddKimberryJob = async (j: Omit<KimberryJob, 'id'>) => {
+    try {
+      await addDoc(collection(db, 'kimberryJobs'), j);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'kimberryJobs');
+    }
   };
 
-  const handleDeleteKimberryJob = (id: string) => {
+  const handleEditKimberryJob = async (j: KimberryJob) => {
+    try {
+      const { id, ...rest } = j;
+      await updateDoc(doc(db, 'kimberryJobs', id), rest);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'kimberryJobs');
+    }
+  };
+
+  const handleDeleteKimberryJob = async (id: string) => {
     if (confirm('Xác nhận xóa job này?')) {
-      setKimberryJobs(kimberryJobs.filter(job => job.id !== id));
+      try {
+        await deleteDoc(doc(db, 'kimberryJobs', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, 'kimberryJobs');
+      }
     }
   };
 
-  const handleAddBankTransaction = (t: Omit<BankTransaction, 'id'>) => {
-    setBankTransactions([...bankTransactions, { id: Math.random().toString(36).substring(2, 9), ...t }]);
+  const handleAddBankTransaction = async (t: Omit<BankTransaction, 'id'>) => {
+    try {
+      await addDoc(collection(db, 'bankTransactions'), t);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'bankTransactions');
+    }
   };
 
-  const handleEditBankTransaction = (t: BankTransaction) => {
-    setBankTransactions(bankTransactions.map(tx => tx.id === t.id ? t : tx));
+  const handleEditBankTransaction = async (t: BankTransaction) => {
+    try {
+      const { id, ...rest } = t;
+      await updateDoc(doc(db, 'bankTransactions', id), rest);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'bankTransactions');
+    }
   };
 
-  const handleDeleteBankTransaction = (id: string) => {
+  const handleDeleteBankTransaction = async (id: string) => {
     if (confirm('Xác nhận xóa giao dịch này?')) {
-      setBankTransactions(bankTransactions.filter(tx => tx.id !== id));
+      try {
+        await deleteDoc(doc(db, 'bankTransactions', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, 'bankTransactions');
+      }
     }
   };
 
-  const handleUpdateVat = (r: VatRecord) => {
-    const existingIndex = vatRecords.findIndex(v => v.monthYear === r.monthYear);
-    if (existingIndex >= 0) {
-      const newRecords = [...vatRecords];
-      newRecords[existingIndex] = r;
-      setVatRecords(newRecords);
-    } else {
-      setVatRecords([...vatRecords, r]);
+  const handleUpdateVat = async (r: VatRecord) => {
+    try {
+      const path = 'vatRecords';
+      const existing = vatRecords.find(v => v.monthYear === r.monthYear);
+      if (existing) {
+        await updateDoc(doc(db, path, (existing as any).id), { amount: r.amount });
+      } else {
+        await addDoc(collection(db, path), r);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'vatRecords');
     }
   };
 
-  const handleSaveExpense = (data: Partial<Expense>) => {
-    const newExpense: Expense = {
-      id: Math.random().toString(36).substring(2, 9),
-      date: data.date!,
-      type: data.type!,
-      amount: Number(data.amount) || 0,
-      submitter: currentUser?.username || 'System',
-      invoiceFile: data.invoiceFile || 'https://images.unsplash.com/photo-1554224155-1697439ceff5?auto=format&fit=crop&q=80&w=400',
-      isApproved: false,
-      isSettled: false
-    };
-    setExpenses([newExpense, ...expenses]);
-    addActivity(`${currentUser?.username} đã gửi yêu cầu quyết toán ${new Intl.NumberFormat('vi-VN').format(newExpense.amount)} vnđ cho hoá đơn ${newExpense.type}`, 'submit');
-    setIsModalOpen(false);
+  const handleSaveExpense = async (data: Partial<Expense>) => {
+    try {
+      const newExpense = {
+        date: data.date!,
+        type: data.type!,
+        amount: Number(data.amount) || 0,
+        submitter: currentUser?.username || 'System',
+        invoiceFile: data.invoiceFile || 'https://images.unsplash.com/photo-1554224155-1697439ceff5?auto=format&fit=crop&q=80&w=400',
+        isApproved: false,
+        isSettled: false
+      };
+      await addDoc(collection(db, 'expenses'), newExpense);
+      addActivity(`${currentUser?.username} đã gửi yêu cầu quyết toán ${new Intl.NumberFormat('vi-VN').format(newExpense.amount)} vnđ cho hoá đơn ${newExpense.type}`, 'submit');
+      setIsModalOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'expenses');
+    }
   };
 
-  const handleApprove = (id: string) => {
-    setExpenses(expenses.map(ex => {
-      if (ex.id === id) {
+  const handleApprove = async (id: string) => {
+    try {
+      const ex = expenses.find(e => e.id === id);
+      if (ex) {
+        await updateDoc(doc(db, 'expenses', id), { isApproved: true });
         addActivity(`Cấp quản lý đã phê duyệt yêu cầu quyết toán ${ex.type} của ${ex.submitter}`, 'approve');
-        return { ...ex, isApproved: true };
       }
-      return ex;
-    }));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'expenses');
+    }
   };
 
-  const handleSettle = (id: string) => {
-    setExpenses(expenses.map(ex => {
-      if (ex.id === id) {
+  const handleSettle = async (id: string) => {
+    try {
+      const ex = expenses.find(e => e.id === id);
+      if (ex) {
+        await updateDoc(doc(db, 'expenses', id), { isSettled: true });
         addActivity(`Kế toán đã quyết toán hoá đơn ${ex.type} cho ${ex.submitter} với số tiền ${new Intl.NumberFormat('vi-VN').format(ex.amount)} vnđ`, 'settle');
-        return { ...ex, isSettled: true };
       }
-      return ex;
-    }));
-  };
-
-  const handleSaveEmployee = (data: Partial<Employee>) => {
-    if (editEmp) {
-      setEmployees(employees.map(e => e.id === editEmp.id ? { ...e, ...data } as Employee : e));
-    } else {
-      const newEmp: Employee = {
-        id: Math.random().toString(36).substring(2, 9),
-        ...data
-      } as Employee;
-      setEmployees([...employees, newEmp]);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'expenses');
     }
-    setIsEmpModalOpen(false);
   };
 
-  const handleDeleteEmployee = (id: string) => {
+  const handleSaveEmployee = async (data: Partial<Employee>) => {
+    try {
+      if (editEmp) {
+        const { id, ...rest } = data;
+        await updateDoc(doc(db, 'employees', editEmp.id), rest);
+      } else {
+        await addDoc(collection(db, 'employees'), data);
+      }
+      setIsEmpModalOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'employees');
+    }
+  };
+
+  const handleDeleteEmployee = async (id: string) => {
     if (confirm('Xác nhận xóa nhân viên này?')) {
-      setEmployees(employees.filter(e => e.id !== id));
+      try {
+        await deleteDoc(doc(db, 'employees', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, 'employees');
+      }
     }
   };
 
-  const handleSaveCategory = (data: Partial<ExpenseCategory>) => {
-    if (editCat) {
-      setExpenseCategories(expenseCategories.map(c => c.id === editCat.id ? { ...c, ...data } as ExpenseCategory : c));
-    } else {
-      const newCat: ExpenseCategory = {
-        id: Math.random().toString(36).substring(2, 9),
-        ...data
-      } as ExpenseCategory;
-      setExpenseCategories([...expenseCategories, newCat]);
+  const handleSaveCategory = async (data: Partial<ExpenseCategory>) => {
+    try {
+      if (editCat) {
+        await updateDoc(doc(db, 'expenseCategories', editCat.id), { name: data.name });
+      } else {
+        await addDoc(collection(db, 'expenseCategories'), data);
+      }
+      setIsCatModalOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'expenseCategories');
     }
-    setIsCatModalOpen(false);
   };
 
-  const handleDeleteCategory = (id: string) => {
+  const handleDeleteCategory = async (id: string) => {
     if (confirm('Xác nhận xóa loại chi phí này?')) {
-      setExpenseCategories(expenseCategories.filter(c => c.id !== id));
+      try {
+        await deleteDoc(doc(db, 'expenseCategories', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, 'expenseCategories');
+      }
     }
   };
 
-  const handleAddCashTransaction = (t: Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string }) => {
-    setCashTransactions(prev => {
+  const handleAddCashTransaction = async (t: Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string }) => {
+    try {
       let vn = t.voucherNumber;
       if (!vn) {
         if (t.type === 'receipt') {
-          // Find latest PT number in prev
-          const receipts = prev.filter(tx => tx.type === 'receipt');
+          const receipts = cashTransactions.filter(tx => tx.type === 'receipt');
           let maxNum = 0;
           receipts.forEach(r => {
             const m = r.voucherNumber.match(/PT(\d+)/);
@@ -575,7 +707,7 @@ export default function App() {
           });
           vn = `PT${String(maxNum + 1).padStart(5, '0')}`;
         } else {
-          const payments = prev.filter(tx => tx.type === 'payment');
+          const payments = cashTransactions.filter(tx => tx.type === 'payment');
           let maxNum = 0;
           payments.forEach(p => {
             const m = p.voucherNumber.match(/PC(\d+)/);
@@ -585,19 +717,22 @@ export default function App() {
         }
       }
       
-      const newTx: CashTransaction = {
-        id: Math.random().toString(36).substring(2, 9),
-        voucherNumber: vn!,
-        ...t
-      };
-      return [...prev, newTx];
-    });
+      await addDoc(collection(db, 'cashTransactions'), {
+        ...t,
+        voucherNumber: vn
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'cashTransactions');
+    }
   };
 
-  const handleBulkAddCashTransactions = (batch: (Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string })[]) => {
-    setCashTransactions(prev => {
-      let currentTransactions = [...prev];
-      batch.forEach(t => {
+  const handleBulkAddCashTransactions = async (batch: (Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string })[]) => {
+    try {
+      // For simplicity in sync, we just add them one by one or we could use WriteBatch
+      // But adding one by one and waiting for sync is cleaner for initial impl if batch is small
+      // We'll calculate voucher numbers ahead or just let Firestore auto-gen if not provided
+      let currentTransactions = [...cashTransactions];
+      for (const t of batch) {
         let vn = t.voucherNumber;
         if (!vn) {
           if (t.type === 'receipt') {
@@ -619,23 +754,43 @@ export default function App() {
           }
         }
         
-        currentTransactions.push({
-          id: Math.random().toString(36).substring(2, 9),
-          voucherNumber: vn!,
-          ...t
-        } as CashTransaction);
-      });
-      return currentTransactions;
-    });
+        const newDoc = { ...t, voucherNumber: vn };
+        await addDoc(collection(db, 'cashTransactions'), newDoc);
+        // We push to local temp array just to keep track of voucher numbers in the same loop
+        currentTransactions.push({ id: 'temp', ...newDoc } as CashTransaction);
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'cashTransactions');
+    }
   };
 
-  const handleEditCashTransaction = (t: CashTransaction) => {
-    setCashTransactions(cashTransactions.map(tx => tx.id === t.id ? t : tx));
+  const handleEditCashTransaction = async (t: CashTransaction) => {
+    try {
+      const { id, ...rest } = t;
+      await updateDoc(doc(db, 'cashTransactions', id), rest);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'cashTransactions');
+    }
   };
 
-  const handleDeleteCashTransaction = (id: string) => {
+  const handleDeleteCashTransaction = async (id: string) => {
     if (confirm('Xác nhận xóa chứng từ này?')) {
-      setCashTransactions(cashTransactions.filter(tx => tx.id !== id));
+      try {
+        await deleteDoc(doc(db, 'cashTransactions', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, 'cashTransactions');
+      }
+    }
+  };
+
+  const handleUpdateInitialBalance = async (b: InitialBalanceInfo) => {
+    try {
+      await setDoc(doc(db, 'config', 'system'), {
+        initialBalanceDate: b.date,
+        initialBalanceAmount: b.amount
+      }, { merge: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'config/system');
     }
   };
 
@@ -666,7 +821,7 @@ export default function App() {
               onBulkAddTransactions={handleBulkAddCashTransactions}
               onEditTransaction={handleEditCashTransaction}
               onDeleteTransaction={handleDeleteCashTransaction}
-              onUpdateInitialBalance={setInitialBalance}
+              onUpdateInitialBalance={handleUpdateInitialBalance}
             />
           } />
           <Route path="/tai-chinh/luu-chuyen" element={
@@ -677,7 +832,7 @@ export default function App() {
               onBulkAddTransactions={handleBulkAddCashTransactions}
               onEditTransaction={handleEditCashTransaction}
               onDeleteTransaction={handleDeleteCashTransaction}
-              onUpdateInitialBalance={setInitialBalance}
+              onUpdateInitialBalance={handleUpdateInitialBalance}
             />
           } />
           <Route path="/tai-chinh/kimberry" element={
