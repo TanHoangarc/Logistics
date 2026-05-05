@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { 
   Home, 
@@ -51,10 +51,14 @@ import {
   Train,
   UploadCloud,
   CloudDownload,
-  Calendar
+  Calendar,
+  FileSpreadsheet,
+  CloudUpload,
+  History
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
+import * as XLSX from 'xlsx';
 
 import { db, auth, handleFirestoreError, OperationType } from './lib/firebase';
 import { 
@@ -1331,6 +1335,98 @@ const CashBookView = ({
     setIsSettingsOpen(false);
   };
 
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importHistory, setImportHistory] = useState([
+    { id: '1', date: 'Mar 13, 2026 16:50:49', fileName: 'Import_Cash_Book_Q1.xlsx', user: 'TeddyDiem' },
+    { id: '2', date: 'Jan 21, 2026 14:47:46', fileName: 'Expenses_2025_Final.xlsx', user: 'IrisHuynh' },
+  ]);
+
+  const handleDownloadTemplate = () => {
+    const templateData = [
+      { 'Ngày (YYYY-MM-DD)': '2024-05-20', 'Diễn giải': 'Thu tiền bán hàng', 'Đối tượng': 'Khách hàng A', 'Số tiền': 5000000, 'Loại (Thu/Chi)': 'Thu' },
+      { 'Ngày (YYYY-MM-DD)': '2024-05-21', 'Diễn giải': 'Thanh toán tiền điện', 'Đối tượng': 'EVN', 'Số tiền': 1200000, 'Loại (Thu/Chi)': 'Chi' },
+    ];
+    const worksheet = XLSX.utils.json_to_sheet(templateData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
+    XLSX.writeFile(workbook, "Kimberry_CashBook_Template.xlsx");
+  };
+
+  const handleImportExcel = (data: any[], fileName: string) => {
+    const newTransactions: Omit<CashTransaction, 'id' | 'voucherNumber'>[] = data.map(item => ({
+      date: item['Ngày (YYYY-MM-DD)'] || new Date().toISOString().split('T')[0],
+      description: item['Diễn giải'] || 'Import from Excel',
+      person: item['Đối tượng'] || '-',
+      amount: Number(item['Số tiền']) || 0,
+      type: (item['Loại (Thu/Chi)']?.toLowerCase() === 'thu' || item['Loại (Thu/Chi)']?.toLowerCase() === 'receipt') ? 'receipt' : 'payment'
+    }));
+
+    newTransactions.forEach(t => onAddTransaction(t));
+    
+    setImportHistory(prev => [
+      { id: Math.random().toString(36).substring(2, 9), date: new Date().toLocaleString(), fileName, user: 'Hoang Dan' },
+      ...prev.slice(0, 5)
+    ]);
+    
+    setIsImportModalOpen(false);
+    alert(`Đã import thành công ${newTransactions.length} chứng từ.`);
+  };
+
+  const handleExportExcel = () => {
+    // Sort transactions properly before exporting
+    const sortedForExport = [...transactions].sort((a, b) => {
+      if (a.date !== b.date) return a.date.localeCompare(b.date);
+      return a.id.localeCompare(b.id);
+    });
+
+    let runningBal = initialBalance.amount;
+    const dataToExport = sortedForExport.map(t => {
+      if (t.date >= initialBalance.date) {
+        if (t.type === 'receipt') runningBal += t.amount;
+        else runningBal -= t.amount;
+      }
+      
+      return {
+        'Ngày': formatDateDDMMYYYY(t.date),
+        'Số chứng từ': t.voucherNumber,
+        'Diễn giải': t.description,
+        'Đối tượng': t.person,
+        'Thu': t.type === 'receipt' ? t.amount : 0,
+        'Chi': t.type === 'payment' ? t.amount : 0,
+        'Số dư': runningBal
+      };
+    });
+
+    // Add initial balance row at top
+    dataToExport.unshift({
+      'Ngày': formatDateDDMMYYYY(initialBalance.date),
+      'Số chứng từ': '-',
+      'Diễn giải': 'Số dư đầu kỳ',
+      'Đối tượng': '-',
+      'Thu': initialBalance.amount >= 0 ? initialBalance.amount : 0,
+      'Chi': initialBalance.amount < 0 ? Math.abs(initialBalance.amount) : 0,
+      'Số dư': initialBalance.amount
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "NhatKyChiTieu");
+
+    // Set column widths
+    const wscols = [
+      {wch: 12}, // Ngày
+      {wch: 15}, // Số chứng từ
+      {wch: 40}, // Diễn giải
+      {wch: 25}, // Đối tượng
+      {wch: 15}, // Thu
+      {wch: 15}, // Chi
+      {wch: 15}  // Số dư
+    ];
+    worksheet['!cols'] = wscols;
+
+    XLSX.writeFile(workbook, `Nhat_Ky_Chi_Tieu_${new Date().toISOString().split('T')[0]}.xlsx`);
+  };
+
   // Sort and calculate balance
   // We should sort transactions by date ascending, then ID ascending to have a stable order
   const sortedAll = [...transactions].sort((a, b) => {
@@ -1370,14 +1466,14 @@ const CashBookView = ({
             Cài đặt
           </button>
           <button 
-            onClick={() => alert('Chức năng upload excel đang được phát triển')}
+            onClick={() => setIsImportModalOpen(true)}
             className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
           >
             <Upload size={16} />
             Import (Excel)
           </button>
           <button 
-            onClick={() => alert('Chức năng export excel đang được phát triển')}
+            onClick={handleExportExcel}
             className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
           >
             <Download size={16} />
@@ -1634,6 +1730,223 @@ const CashBookView = ({
           </div>
         )}
       </AnimatePresence>
+
+      <ImportExcelModal 
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImport={handleImportExcel}
+        onDownloadTemplate={handleDownloadTemplate}
+        history={importHistory}
+      />
+    </div>
+  );
+};
+
+interface ImportHistoryItem {
+  id: string;
+  date: string;
+  fileName: string;
+  user: string;
+}
+
+const ImportExcelModal = ({ 
+  isOpen, 
+  onClose, 
+  onImport, 
+  onDownloadTemplate,
+  history 
+}: { 
+  isOpen: boolean, 
+  onClose: () => void, 
+  onImport: (data: any[], fileName: string) => void,
+  onDownloadTemplate: () => void,
+  history: ImportHistoryItem[]
+}) => {
+  const [file, setFile] = useState<File | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  if (!isOpen) return null;
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const droppedFile = e.dataTransfer.files[0];
+    if (droppedFile && (droppedFile.name.endsWith('.xlsx') || droppedFile.name.endsWith('.xls'))) {
+      setFile(droppedFile);
+    } else {
+      alert('Vui lòng chọn file Excel (.xlsx hoặc .xls)');
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+    }
+  };
+
+  const processFile = () => {
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const bstr = e.target?.result;
+        const workbook = XLSX.read(bstr, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const data = XLSX.utils.sheet_to_json(worksheet);
+        onImport(data, file.name);
+        setFile(null);
+      } catch (error) {
+        alert('Lỗi khi đọc file Excel. Vui lòng kiểm tra lại định dạng file.');
+        console.error(error);
+      }
+    };
+    reader.readAsBinaryString(file);
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.9, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="bg-[#f8fafc] rounded-[2rem] shadow-2xl w-full max-w-5xl overflow-hidden flex flex-col md:flex-row h-auto max-h-[90vh]"
+      >
+        <div className="flex-1 p-10 bg-white">
+          <div className="flex justify-between items-center mb-8">
+            <h3 className="text-xl font-bold text-slate-800">Select File <span className="text-red-500 font-normal">*</span></h3>
+            <button onClick={onClose} className="md:hidden p-2 hover:bg-slate-100 rounded-full text-slate-400">
+              <X size={20} />
+            </button>
+          </div>
+
+          <div 
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            className={cn(
+              "border-2 border-dashed rounded-2xl p-16 flex flex-col items-center justify-center transition-all cursor-pointer",
+              isDragging ? "border-blue-400 bg-blue-50/50" : "border-blue-200 bg-slate-50/30 hover:bg-slate-50 hover:border-blue-300",
+              file ? "border-emerald-500 bg-emerald-50/30" : ""
+            )}
+          >
+            <input 
+              type="file" 
+              ref={fileInputRef}
+              onChange={handleFileSelect}
+              className="hidden" 
+              accept=".xlsx,.xls"
+            />
+            <div className="w-20 h-20 bg-white shadow-sm border border-slate-100 rounded-3xl flex items-center justify-center mb-6">
+              {file ? (
+                <FileSpreadsheet className="text-emerald-500" size={36} />
+              ) : (
+                <CloudUpload className="text-slate-400" size={36} />
+              )}
+            </div>
+            {file ? (
+              <div className="text-center">
+                <p className="font-bold text-slate-800 text-lg mb-1">{file.name}</p>
+                <p className="text-sm text-slate-500 font-medium tracking-wide">{(file.size / 1024).toFixed(1)} KB</p>
+              </div>
+            ) : (
+              <div className="text-center">
+                <p className="text-slate-600 font-semibold text-lg">
+                  Drop files here or <span className="text-blue-500 hover:underline">click to upload</span>
+                </p>
+                <p className="text-xs text-slate-400 mt-3 font-medium uppercase tracking-wider">excel files with a size less than 5mb</p>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-6">
+            <button 
+              onClick={(e) => { e.stopPropagation(); onDownloadTemplate(); }}
+              className="text-blue-500 hover:text-blue-600 text-sm font-bold flex items-center gap-2 w-fit transition-colors"
+            >
+              <Download size={16} />
+              <span className="underline underline-offset-4">Download template</span>
+            </button>
+          </div>
+
+          <div className="flex gap-4 mt-12">
+            <button 
+              onClick={onClose}
+              className="px-8 py-3.5 border border-slate-200 rounded-xl text-slate-600 font-bold hover:bg-slate-50 transition-all active:scale-95"
+            >
+              Cancel
+            </button>
+            <button 
+              onClick={processFile}
+              disabled={!file}
+              className={cn(
+                "flex-1 py-3.5 rounded-xl font-bold text-white transition-all shadow-lg active:scale-[0.98]",
+                file ? "bg-[#2563eb] hover:bg-blue-600 shadow-blue-500/20" : "bg-slate-300 cursor-not-allowed shadow-none"
+              )}
+            >
+              Next
+            </button>
+          </div>
+        </div>
+
+        <div className="w-full md:w-[400px] p-10 border-l border-slate-100 bg-[#f8fafc] overflow-y-auto">
+          <div className="flex justify-between items-center mb-8">
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center">
+                <History size={16} className="text-slate-600" />
+              </div>
+              Import History
+            </h3>
+            <button onClick={onClose} className="hidden md:block p-2 hover:bg-slate-200 rounded-full text-slate-400">
+              <X size={20} />
+            </button>
+          </div>
+          
+          <div className="space-y-8 relative ml-4 border-l border-slate-200 pl-8 pb-4">
+            <p className="text-[11px] font-bold text-slate-400 mb-8 uppercase tracking-widest -ml-4 bg-[#f8fafc] py-1 px-2 w-fit z-10 sticky top-0">
+               Recent Imports
+            </p>
+            
+            {history.map((item, idx) => (
+              <div key={item.id} className="relative">
+                <div className={cn(
+                  "absolute -left-[37px] top-1.5 w-4 h-4 rounded-full border-[3px] border-[#f8fafc] shadow-sm z-20",
+                  idx === 0 ? "bg-purple-500" : idx === 1 ? "bg-slate-900" : "bg-blue-400"
+                )}></div>
+                <div className="text-[11px] font-bold text-slate-400 mb-2 uppercase tracking-wide">{item.date}</div>
+                <div className="bg-white p-4 rounded-2xl border border-slate-200/50 shadow-sm hover:shadow-md transition-all group">
+                  <p className="text-[13px] text-slate-700 leading-relaxed mb-3">
+                    Upload <span className="font-bold text-slate-900 break-all">{item.fileName}</span> by <span className="font-bold text-slate-900">{item.user}</span>
+                  </p>
+                  <div className="flex gap-4 font-bold text-[10px] uppercase tracking-widest">
+                    <button className="text-slate-400 hover:text-slate-800">View details</button>
+                    <button className="text-blue-500 hover:text-blue-700">Download</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            
+            {history.length === 0 && (
+              <div className="text-center py-20 text-slate-400">
+                <History size={40} className="mx-auto mb-4 opacity-20" />
+                <p className="text-sm font-medium">No import history found</p>
+              </div>
+            )}
+          </div>
+        </div>
+      </motion.div>
     </div>
   );
 };
