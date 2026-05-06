@@ -3048,66 +3048,62 @@ const KimberryView = ({
   };
 
   const handleSyncLongHoang = async () => {
-    const savedApiUrl = localStorage.getItem('kimberry_sync_api_url') || "https://kimberry.id.vn/api/export/long-hoang-jobs";
+    const savedApiUrl = localStorage.getItem('kimberry_sync_api_url') || "https://api.kimberry.id.vn/data";
     const apiUrl = window.prompt("Nhập link API nguồn dữ liệu Logistics:", savedApiUrl);
     
     if (!apiUrl) return;
     localStorage.setItem('kimberry_sync_api_url', apiUrl);
 
-    const year = window.prompt("Nhập năm cần đồng bộ (VD: 2026):", new Date().getFullYear().toString());
-    if (!year) return;
+    const yearStr = window.prompt("Nhập năm cần đồng bộ (VD: 2026):", new Date().getFullYear().toString());
+    if (!yearStr) return;
 
     setIsSyncing(true);
     try {
         const response = await fetch(apiUrl);
-        
         if (!response.ok) {
             throw new Error(`Không thể kết nối đến máy chủ Logistic! (Status: ${response.status})`);
         }
-
-        const json = await response.json();
         
-        if (json.success && json.data) {
-            const fetchedJobs = json.data;
-            const jobsToSync = fetchedJobs.filter((j: any) => j.monthYear && j.monthYear.includes(year)).map((j: any) => {
-              let formattedMonthYear = j.monthYear;
-              if (formattedMonthYear.includes('/')) {
-                const parts = formattedMonthYear.split('/');
-                if (parts.length === 2) {
-                  formattedMonthYear = `${parts[1]}-${parts[0]}`;
-                }
-              }
+        const data = await response.json();
+        const jobs = data.jobs || [];
 
-              return {
-                monthYear: formattedMonthYear,
-                job: j.jobCode || j.job || '',
-                booking: j.booking || '',
-                hbl: j.hbl || '',
-                line: j.line || '',
-                cont20: Number(j.cont20) || 0,
-                cont40: Number(j.cont40) || 0,
-                sell: Number(j.sell) || 0,
-              };
-            });
+        // Lọc ra các Job của khách hàng LONG HOANG LOGISTICS
+        const longHoangJobs = jobs.filter((job: any) => {
+          const custName = String(job.customerName || '').toUpperCase();
+          const isLongHoang = custName.includes("LONG HOANG LOGISTICS") || custName.includes("LONG HOANG");
+          return isLongHoang && String(job.year) === yearStr;
+        });
 
-            if (jobsToSync.length === 0) {
-              alert(`Không tìm thấy dữ liệu nào cho năm ${year}`);
-              return;
-            }
+        const formattedData = longHoangJobs.map((job: any) => {
+          let month = String(job.month).padStart(2, '0');
+          let fYear = job.year;
+          return {
+            monthYear: `${fYear}-${month}`,
+            job: job.jobCode || "",
+            booking: job.booking || "",
+            hbl: job.hbl || "",
+            line: job.line || "",
+            cont20: Number(job.cont20) || 0,
+            cont40: Number(job.cont40) || 0,
+            sell: Number(job.sell) || 0
+          };
+        });
 
-            if (onBulkAddJobs) {
-              onBulkAddJobs(jobsToSync);
-            } else {
-              jobsToSync.forEach(onAddJob);
-            }
-            
-            alert(`Đồng bộ dữ liệu thành công! Lấy được ${jobsToSync.length} Jobs của năm ${year}.`);
-        } else {
-            alert("Lỗi: Không đọc được dữ liệu JSON hợp lệ từ server.");
+        if (formattedData.length === 0) {
+            alert(`Không tìm thấy dữ liệu nào cho năm ${yearStr}`);
+            return;
         }
+
+        if (onBulkAddJobs) {
+            onBulkAddJobs(formattedData);
+        } else {
+            formattedData.forEach(onAddJob);
+        }
+        
+        alert(`Đồng bộ dữ liệu thành công! Lấy được ${formattedData.length} Jobs của năm ${yearStr}.`);
     } catch (error) {
-        console.error("Lỗi đồng bộ API:", error);
-        alert("Lỗi khi kết nối đồng bộ: " + error);
+        console.error("Lỗi khi đồng bộ:", error);
+        alert("Đồng bộ thất bại, hãy kiểm tra lại kết nối API!");
     } finally {
         setIsSyncing(false);
     }
