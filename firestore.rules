@@ -91,12 +91,24 @@ service cloud.firestore {
       allow write: if true;
     }
 
+    match /agents/{agentId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
     match /descriptionTemplates/{templateId} {
       allow read: if true;
       allow write: if true;
     }
 
     match /cashTransactions/{txId} {
+      allow read: if true;
+      allow create: if isValidCashTransaction(request.resource.data);
+      allow update: if isValidCashTransaction(request.resource.data);
+      allow delete: if true;
+    }
+
+    match /wcaTransactions/{txId} {
       allow read: if true;
       allow create: if isValidCashTransaction(request.resource.data);
       allow update: if isValidCashTransaction(request.resource.data);

@@ -154,6 +154,7 @@ interface CashTransaction {
   type: 'receipt' | 'payment';
   amount: number;
   person: string;
+  createdAt?: number;
 }
 
 interface InitialBalanceInfo {
@@ -425,9 +426,13 @@ export default function App() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategory[]>([]);
   const [payees, setPayees] = useState<Payee[]>([]);
+  const [agents, setAgents] = useState<Payee[]>([]);
   const [descriptionTemplates, setDescriptionTemplates] = useState<DescriptionTemplate[]>([]);
   
   const [cashTransactions, setCashTransactions] = useState<CashTransaction[]>([]);
+  const [wcaTransactions, setWcaTransactions] = useState<CashTransaction[]>([]);
+  const [wcaInitialBalance, setWcaInitialBalance] = useState<InitialBalanceInfo>({ date: new Date().toISOString().split('T')[0], amount: 0 });
+
   const [initialBalance, setInitialBalance] = useState<InitialBalanceInfo>({ date: new Date().toISOString().split('T')[0], amount: 0 });
   const [kimberryJobs, setKimberryJobs] = useState<KimberryJob[]>([]);
   const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>([]);
@@ -501,11 +506,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const unsubAgents = onSnapshot(collection(db, 'agents'), (snapshot) => {
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Payee));
+      setAgents(data);
+    }, (error) => handleFirestoreError(error, OperationType.LIST, 'agents'));
+    
     const unsub = onSnapshot(collection(db, 'payees'), (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Payee));
       setPayees(data);
     }, (error) => handleFirestoreError(error, OperationType.LIST, 'payees'));
-    return () => unsub();
+    return () => {
+      unsub();
+      unsubAgents();
+    };
   }, []);
 
   useEffect(() => {
@@ -528,11 +541,13 @@ export default function App() {
   const [isEmpModalOpen, setIsEmpModalOpen] = useState(false);
   const [isCatModalOpen, setIsCatModalOpen] = useState(false);
   const [isPayeeModalOpen, setIsPayeeModalOpen] = useState(false);
+  const [isAgentModalOpen, setIsAgentModalOpen] = useState(false);
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   
   const [editEmp, setEditEmp] = useState<Employee | undefined>();
   const [editCat, setEditCat] = useState<ExpenseCategory | undefined>();
   const [editPayee, setEditPayee] = useState<Payee | undefined>();
+  const [editAgent, setEditAgent] = useState<Payee | undefined>();
   const [editTemplate, setEditTemplate] = useState<DescriptionTemplate | undefined>();
 
   useEffect(() => {
@@ -598,6 +613,68 @@ export default function App() {
       } catch (error) {
         handleFirestoreError(error, OperationType.DELETE, 'kimberryJobs');
       }
+    }
+  };
+
+
+  const handleAddWcaTransaction = async (t: Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string }) => {
+    try {
+      let vn = t.voucherNumber;
+      if (!vn) {
+        if (t.type === 'receipt') {
+          const receipts = wcaTransactions.filter(tx => tx.type === 'receipt');
+          let maxNum = 0;
+          receipts.forEach(r => {
+            const m = r.voucherNumber.match(/PTWCA(\d+)/);
+            if (m) maxNum = Math.max(maxNum, parseInt(m[1]));
+          });
+          vn = `PTWCA${String(maxNum + 1).padStart(5, '0')}`;
+        } else {
+          const payments = wcaTransactions.filter(tx => tx.type === 'payment');
+          let maxNum = 0;
+          payments.forEach(p => {
+            const m = p.voucherNumber.match(/PCWCA(\d+)/);
+            if (m) maxNum = Math.max(maxNum, parseInt(m[1]));
+          });
+          vn = `PCWCA${String(maxNum + 1).padStart(5, '0')}`;
+        }
+      }
+      
+      await addDoc(collection(db, 'wcaTransactions'), {
+        ...t,
+        voucherNumber: vn,
+        createdAt: Date.now(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'wcaTransactions');
+    }
+  };
+
+  const handleEditWcaTransaction = async (t: CashTransaction) => {
+    try {
+      const { id, ...rest } = t;
+      await updateDoc(doc(db, 'wcaTransactions', id), rest);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'wcaTransactions');
+    }
+  };
+
+  const handleDeleteWcaTransaction = async (id: string) => {
+    if (confirm('Xác nhận xóa chứng từ này?')) {
+      try {
+        await deleteDoc(doc(db, 'wcaTransactions', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, 'wcaTransactions');
+      }
+    }
+  };
+
+  const handleUpdateWcaInitialBalance = async (b: InitialBalanceInfo) => {
+    try {
+      await setDoc(doc(db, 'config', 'wcaInitialBalance'), b);
+      setWcaInitialBalance(b);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'config/wcaInitialBalance');
     }
   };
 
@@ -732,6 +809,7 @@ export default function App() {
     }
   };
 
+  
   const handleSavePayee = async (data: { name: string }) => {
     try {
       if (editPayee) {
@@ -754,6 +832,30 @@ export default function App() {
       }
     }
   };
+
+  const handleSaveAgent = async (data: { name: string }) => {
+    try {
+      if (editAgent) {
+        await updateDoc(doc(db, 'agents', editAgent.id), { name: data.name });
+      } else {
+        await addDoc(collection(db, 'agents'), data);
+      }
+      setIsAgentModalOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'agents');
+    }
+  };
+
+  const handleDeleteAgent = async (id: string) => {
+    if (confirm('Xác nhận xóa Agent này?')) {
+      try {
+        await deleteDoc(doc(db, 'agents', id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, 'agents');
+      }
+    }
+  };
+
 
   const handleSaveTemplate = async (data: { code: string, content: string, type: 'receipt' | 'payment' | 'both' }) => {
     try {
@@ -803,7 +905,8 @@ export default function App() {
       
       await addDoc(collection(db, 'cashTransactions'), {
         ...t,
-        voucherNumber: vn
+        voucherNumber: vn,
+        createdAt: Date.now(),
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'cashTransactions');
@@ -838,7 +941,7 @@ export default function App() {
           }
         }
         
-        const newDoc = { ...t, voucherNumber: vn };
+        const newDoc = { ...t, voucherNumber: vn, createdAt: Date.now() };
         await addDoc(collection(db, 'cashTransactions'), newDoc);
         // We push to local temp array just to keep track of voucher numbers in the same loop
         currentTransactions.push({ id: 'temp', ...newDoc } as CashTransaction);
@@ -903,6 +1006,7 @@ export default function App() {
               initialBalance={initialBalance}
               payees={payees}
               descriptionTemplates={descriptionTemplates}
+              onAddAgentOrPayee={() => setIsPayeeModalOpen(true)}
               onAddTransaction={handleAddCashTransaction}
               onBulkAddTransactions={handleBulkAddCashTransactions}
               onEditTransaction={handleEditCashTransaction}
@@ -912,15 +1016,19 @@ export default function App() {
           } />
           <Route path="/tai-chinh/luu-chuyen" element={
             <CashBookView 
-              transactions={cashTransactions}
-              initialBalance={initialBalance}
-              payees={payees}
+              transactions={wcaTransactions}
+              initialBalance={wcaInitialBalance}
+              payees={agents}
               descriptionTemplates={descriptionTemplates}
-              onAddTransaction={handleAddCashTransaction}
-              onBulkAddTransactions={handleBulkAddCashTransactions}
-              onEditTransaction={handleEditCashTransaction}
-              onDeleteTransaction={handleDeleteCashTransaction}
-              onUpdateInitialBalance={handleUpdateInitialBalance}
+              onAddAgentOrPayee={() => setIsAgentModalOpen(true)}
+              onAddTransaction={handleAddWcaTransaction}
+              onBulkAddTransactions={async () => {}}
+              onEditTransaction={handleEditWcaTransaction}
+              onDeleteTransaction={handleDeleteWcaTransaction}
+              onUpdateInitialBalance={handleUpdateWcaInitialBalance}
+              title="WCA"
+              agentLabel="Agent"
+              showImportExport={false}
             />
           } />
           <Route path="/tai-chinh/kimberry" element={
@@ -956,6 +1064,10 @@ export default function App() {
             <DataManagementView 
               expenseCategories={expenseCategories}
               payees={payees}
+              agents={agents}
+              onAddAgent={() => { setEditAgent(undefined); setIsAgentModalOpen(true); }}
+              onEditAgent={(p) => { setEditAgent(p); setIsAgentModalOpen(true); }}
+              onDeleteAgent={handleDeleteAgent}
               descriptionTemplates={descriptionTemplates}
               onAddCategory={() => { setEditCat(undefined); setIsCatModalOpen(true); }}
               onEditCategory={(c) => { setEditCat(c); setIsCatModalOpen(true); }}
@@ -1598,29 +1710,29 @@ const ApprovalView = ({
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Ngày</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Người lập</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Loại chi phí</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Số tiền</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Hóa đơn</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Phê duyệt (Manager)</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Quyết toán (Acc)</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Thao tác</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Ngày</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Người lập</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Loại chi phí</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Số tiền</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Hóa đơn</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Phê duyệt (Manager)</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Quyết toán (Acc)</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Thao tác</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
               {expenses.map((ex) => (
                 <tr key={ex.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-6 py-4 text-sm font-medium text-slate-600">{formatDateDDMMYYYY(ex.date)}</td>
-                  <td className="px-6 py-4">
+                  <td className="px-2 py-3 text-sm font-medium text-slate-600">{formatDateDDMMYYYY(ex.date)}</td>
+                  <td className="px-2 py-3">
                     <div className="flex items-center gap-2">
                       <div className="w-7 h-7 bg-slate-100 rounded-full flex items-center justify-center text-[10px] font-bold">{ex.submitter[0]}</div>
                       <span className="text-sm font-bold text-slate-800">{ex.submitter}</span>
                     </div>
                   </td>
-                  <td className="px-6 py-4 text-sm text-slate-600 font-medium">{ex.type}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-slate-900">{new Intl.NumberFormat('vi-VN').format(ex.amount)} đ</td>
-                  <td className="px-6 py-4">
+                  <td className="px-2 py-3 text-sm text-slate-600 font-medium">{ex.type}</td>
+                  <td className="px-2 py-3 text-sm font-bold text-slate-900">{new Intl.NumberFormat('vi-VN').format(ex.amount)} đ</td>
+                  <td className="px-2 py-3">
                     <button 
                       onClick={() => setSelectedInvoice(ex.invoiceFile)}
                       className="p-2 bg-slate-100 rounded-lg text-slate-500 hover:text-indigo-600 transition-colors"
@@ -1628,7 +1740,7 @@ const ApprovalView = ({
                       <Eye size={16} />
                     </button>
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-2 py-3">
                     <span className={cn(
                       "px-2.5 py-1 rounded-full text-[10px] font-bold tracking-tight uppercase",
                       ex.isApproved ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-600"
@@ -1636,7 +1748,7 @@ const ApprovalView = ({
                       {ex.isApproved ? 'Đã duyệt' : 'Chờ duyệt'}
                     </span>
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-2 py-3">
                     <span className={cn(
                       "px-2.5 py-1 rounded-full text-[10px] font-bold tracking-tight uppercase",
                       ex.isSettled ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-400"
@@ -1644,7 +1756,7 @@ const ApprovalView = ({
                       {ex.isSettled ? 'Đã quyết toán' : 'Chưa quyết toán'}
                     </span>
                   </td>
-                  <td className="px-6 py-4">
+                  <td className="px-2 py-3">
                     <div className="flex items-center justify-center gap-2">
                        {role === 'Manager' || role === 'Admin' ? (
                           <button 
@@ -1735,15 +1847,23 @@ const CashBookView = ({
   onBulkAddTransactions,
   onEditTransaction,
   onDeleteTransaction,
-  onUpdateInitialBalance
+  onUpdateInitialBalance,
+  onAddAgentOrPayee,
+  title = "Nhật ký chi tiêu",
+  agentLabel = "Người nhận/Nộp",
+  showImportExport = true
 }: {
   transactions: CashTransaction[];
+  title?: string;
+  agentLabel?: string;
+  showImportExport?: boolean;
   initialBalance: InitialBalanceInfo;
   payees: Payee[];
   descriptionTemplates: DescriptionTemplate[];
   onAddTransaction: (t: Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string }) => void;
   onBulkAddTransactions: (batch: (Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string })[]) => void;
   onEditTransaction: (t: CashTransaction) => void;
+  onAddAgentOrPayee: () => void;
   onDeleteTransaction: (id: string) => void;
   onUpdateInitialBalance: (b: InitialBalanceInfo) => void;
 }) => {
@@ -1759,6 +1879,9 @@ const CashBookView = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingDate, setSettingDate] = useState(initialBalance.date);
   const [settingAmount, setSettingAmount] = useState(initialBalance.amount.toString());
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
 
   const [formData, setFormData] = useState<Omit<CashTransaction, 'id' | 'voucherNumber'>>({
     date: new Date().toISOString().split('T')[0],
@@ -1895,7 +2018,10 @@ const CashBookView = ({
     // Sort transactions properly before exporting
     const sortedForExport = [...transactions].sort((a, b) => {
       if (a.date !== b.date) return a.date.localeCompare(b.date);
-      if (a.voucherNumber !== b.voucherNumber) return a.voucherNumber.localeCompare(b.voucherNumber);
+      if (a.createdAt && b.createdAt) return a.createdAt - b.createdAt;
+      const numA = parseInt((a.voucherNumber || '').replace(/\D/g, '')) || 0;
+      const numB = parseInt((b.voucherNumber || '').replace(/\D/g, '')) || 0;
+      if (numA !== numB) return numA - numB;
       return a.id.localeCompare(b.id);
     });
 
@@ -1949,7 +2075,10 @@ const CashBookView = ({
   // We should sort transactions by date ascending, then Voucher Number, then ID ascending to have a stable order
   const sortedAll = [...transactions].sort((a, b) => {
     if (a.date !== b.date) return a.date.localeCompare(b.date);
-    if (a.voucherNumber !== b.voucherNumber) return (a.voucherNumber || '').localeCompare(b.voucherNumber || '');
+    if (a.createdAt !== undefined && b.createdAt !== undefined) return a.createdAt - b.createdAt;
+    const numA = parseInt((a.voucherNumber || '').replace(/\D/g, '')) || 0;
+    const numB = parseInt((b.voucherNumber || '').replace(/\D/g, '')) || 0;
+    if (numA !== numB) return numA - numB;
     return a.id.localeCompare(b.id);
   });
 
@@ -1970,12 +2099,18 @@ const CashBookView = ({
     return true;
   });
 
-  const displayList = [...filtered].reverse();
+  const displayListAll = [...filtered].reverse();
+  const totalPages = Math.ceil(displayListAll.length / ITEMS_PER_PAGE) || 1;
+  const displayList = displayListAll.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterType, search, fromDate, toDate, targetPerson]);
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <h2 className="text-2xl font-bold text-slate-900 italic">Tiền mặt</h2>
+        <h2 className="text-2xl font-bold text-slate-900 italic">{title}</h2>
         <div className="flex flex-wrap items-center gap-2">
           <button 
             onClick={() => setIsSettingsOpen(true)}
@@ -1984,20 +2119,24 @@ const CashBookView = ({
             <Settings size={16} />
             Cài đặt
           </button>
-          <button 
-            onClick={() => setIsImportModalOpen(true)}
-            className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
-          >
-            <Upload size={16} />
-            Import (Excel)
-          </button>
-          <button 
-            onClick={handleExportExcel}
-            className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
-          >
-            <Download size={16} />
-            In Sổ (Excel)
-          </button>
+          {showImportExport && (
+            <>
+              <button 
+                onClick={() => setIsImportModalOpen(true)}
+                className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
+              >
+                <Upload size={16} />
+                Import (Excel)
+              </button>
+              <button 
+                onClick={handleExportExcel}
+                className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
+              >
+                <Download size={16} />
+                In Sổ (Excel)
+              </button>
+            </>
+          )}
           <div className="relative group">
             <button 
               className="bg-[#2563eb] text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm active:scale-95 transition-all hover:bg-blue-700 flex items-center gap-2"
@@ -2106,14 +2245,14 @@ const CashBookView = ({
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Ngày CT</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Số phiếu</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap min-w-[200px]">Diễn giải</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Thu (Nợ)</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Chi (Có)</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Số tồn</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Người nhận/Nộp</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center whitespace-nowrap">Thao tác</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Ngày CT</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Số phiếu</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest w-full min-w-[150px]">Diễn giải</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap min-w-[110px]">Thu (Nợ)</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap min-w-[110px]">Chi (Có)</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap min-w-[120px]">Số tồn</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest leading-tight w-[150px]">{agentLabel}</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center whitespace-nowrap">Thao tác</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -2125,14 +2264,17 @@ const CashBookView = ({
                 </tr>
               ) : displayList.map((t) => (
                 <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-6 py-4 text-sm font-medium text-slate-600 whitespace-nowrap">{formatDateDDMMYYYY(t.date)}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-slate-800 whitespace-nowrap">{t.voucherNumber}</td>
-                  <td className="px-6 py-4 text-sm text-slate-600 font-medium">{t.description}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-emerald-600 text-right whitespace-nowrap">{t.type === 'receipt' ? new Intl.NumberFormat('vi-VN').format(t.amount) : ''}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-rose-600 text-right whitespace-nowrap">{t.type === 'payment' ? new Intl.NumberFormat('vi-VN').format(t.amount) : ''}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-slate-900 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(t.computedBalance)}</td>
-                  <td className="px-6 py-4 text-sm text-slate-600 whitespace-nowrap">{t.person}</td>
-                  <td className="px-6 py-4">
+                  <td className="px-2 py-3 text-sm font-medium text-slate-600 whitespace-nowrap">{formatDateDDMMYYYY(t.date)}</td>
+                  <td className={cn(
+                    "px-2 py-3 text-sm font-bold whitespace-nowrap",
+                    t.type === 'receipt' ? "text-emerald-600" : "text-rose-600"
+                  )}>{t.voucherNumber}</td>
+                  <td className="px-2 py-3 text-sm text-slate-600 font-medium">{t.description}</td>
+                  <td className="px-2 py-3 text-sm font-bold text-emerald-600 text-right whitespace-nowrap">{t.type === 'receipt' ? new Intl.NumberFormat('vi-VN').format(t.amount) : ''}</td>
+                  <td className="px-2 py-3 text-sm font-bold text-rose-600 text-right whitespace-nowrap">{t.type === 'payment' ? new Intl.NumberFormat('vi-VN').format(t.amount) : ''}</td>
+                  <td className="px-2 py-3 text-sm font-bold text-slate-900 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(t.computedBalance)}</td>
+                  <td className="px-2 py-3 text-sm text-slate-600 min-w-[120px] max-w-[200px] whitespace-normal break-words leading-tight">{t.person}</td>
+                  <td className="px-2 py-3">
                     <div className="flex items-center justify-center gap-2">
                       <button 
                         onClick={() => handleOpenModal(t)}
@@ -2153,6 +2295,29 @@ const CashBookView = ({
             </tbody>
           </table>
         </div>
+        {totalPages > 1 && (
+          <div className="border-t border-slate-100 p-4 flex items-center justify-between">
+            <div className="text-sm text-slate-500 font-medium">
+              Trang {currentPage} / {totalPages}
+            </div>
+            <div className="flex items-center flex-wrap gap-1 justify-end">
+              <button 
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))} 
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-lg disabled:opacity-50 transition-colors"
+              >
+                Trước
+              </button>
+              <button 
+                onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} 
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-lg disabled:opacity-50 transition-colors"
+              >
+                Sau
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Write transaction modal */}
@@ -2241,32 +2406,40 @@ const CashBookView = ({
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Người nhận / Nộp</label>
-                  <select 
-                    value={formData.person}
-                    onChange={e => {
-                      const selectedPerson = e.target.value;
-                      let newDesc = formData.description;
-                      if (selectedPerson && selectedPerson !== 'Khác' && formData.description.includes('Tạm ứng')) {
-                        // Append if the description doesn't already end with the person name to avoid duplicates
-                        if (!newDesc.endsWith(selectedPerson)) {
-                          newDesc = `${newDesc.trim()} ${selectedPerson}`;
+                  <label className="text-xs font-bold text-slate-500 uppercase">{agentLabel}</label>
+                  <div className="flex items-center gap-2">
+                    <select 
+                      value={formData.person}
+                      onChange={e => {
+                        const selectedPerson = e.target.value;
+                        let newDesc = formData.description;
+                        if (selectedPerson && selectedPerson !== 'Khác' && formData.description.includes('Tạm ứng')) {
+                          if (!newDesc.endsWith(selectedPerson)) {
+                            newDesc = `${newDesc.trim()} ${selectedPerson}`;
+                          }
                         }
-                      }
-                      setFormData({ ...formData, person: selectedPerson, description: newDesc });
-                    }}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
-                  >
-                    <option value="">-- Chọn người nhận/nộp --</option>
-                    {payees.map(p => (
-                      <option key={p.id} value={p.name}>{p.name}</option>
-                    ))}
-                    <option value="Khác">Khác / Nhập trực tiếp</option>
-                  </select>
+                        setFormData({ ...formData, person: selectedPerson, description: newDesc });
+                      }}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
+                    >
+                      <option value="">-- Chọn {agentLabel.toLowerCase()} --</option>
+                      {payees.map(p => (
+                        <option key={p.id} value={p.name}>{p.name}</option>
+                      ))}
+                      <option value="Khác">Khác / Nhập trực tiếp</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => onAddAgentOrPayee && onAddAgentOrPayee()}
+                      className="bg-[#2563eb] text-white p-2.5 rounded-xl text-sm font-bold shadow-sm hover:brightness-110 active:scale-95 transition-all"
+                    >
+                      <Plus size={16} />
+                    </button>
+                  </div>
                   {formData.person === 'Khác' && (
                     <input 
                       type="text" 
-                      placeholder="Nhập tên người nhận/nộp..."
+                      placeholder={`Nhập tên ${agentLabel.toLowerCase()}...`}
                       className="mt-2 w-full bg-white border border-slate-200 rounded-xl py-2.5 px-4 text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
                       onChange={(e) => setFormData({ ...formData, person: e.target.value })}
                     />
@@ -2305,7 +2478,7 @@ const CashBookView = ({
                   </div>
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-500 uppercase">Số dư tiền mặt</label>
+                  <label className="text-xs font-bold text-slate-500 uppercase">Số dư WCA</label>
                   <div className="relative">
                     <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" size={16} />
                     <input 
@@ -2559,12 +2732,17 @@ const DataManagementView = ({
   onAddPayee,
   onEditPayee,
   onDeletePayee,
+  agents,
+  onAddAgent,
+  onEditAgent,
+  onDeleteAgent,
   onAddTemplate,
   onEditTemplate,
   onDeleteTemplate,
 }: {
   expenseCategories: ExpenseCategory[];
   payees: Payee[];
+  agents: Payee[];
   descriptionTemplates: DescriptionTemplate[];
   onAddCategory: () => void;
   onEditCategory: (c: ExpenseCategory) => void;
@@ -2572,15 +2750,19 @@ const DataManagementView = ({
   onAddPayee: () => void;
   onEditPayee: (p: Payee) => void;
   onDeletePayee: (id: string) => void;
+  onAddAgent: () => void;
+  onEditAgent: (a: Payee) => void;
+  onDeleteAgent: (id: string) => void;
   onAddTemplate: () => void;
   onEditTemplate: (t: DescriptionTemplate) => void;
   onDeleteTemplate: (id: string) => void;
 }) => {
-  const [activeTab, setActiveTab] = useState<'categories' | 'payees' | 'templates'>('categories');
+  const [activeTab, setActiveTab] = useState<'categories' | 'payees' | 'agents' | 'templates'>('categories');
 
   const tabs = [
     { id: 'categories', label: 'Chi phí', icon: Tag },
     { id: 'payees', label: 'Người nhận/Nộp', icon: Users },
+    { id: 'agents', label: 'Agent', icon: Users },
     { id: 'templates', label: 'Nội dung mẫu', icon: FileText },
   ];
 
@@ -2592,12 +2774,13 @@ const DataManagementView = ({
           onClick={() => {
             if (activeTab === 'categories') onAddCategory();
             if (activeTab === 'payees') onAddPayee();
+            if (activeTab === 'agents') onAddAgent();
             if (activeTab === 'templates') onAddTemplate();
           }}
           className="bg-[#2563eb] text-white px-6 py-2.5 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/20 hover:brightness-110 active:scale-95 transition-all flex items-center gap-2"
         >
           <Plus size={18} />
-          {activeTab === 'categories' ? 'Thêm Loại chi phí' : activeTab === 'payees' ? 'Thêm Người nhận/Nộp' : 'Thêm Mẫu nội dung'}
+          {activeTab === 'categories' ? 'Thêm Loại chi phí' : activeTab === 'payees' ? 'Thêm Người nhận/Nộp' : activeTab === 'agents' ? 'Thêm Agent' : 'Thêm Mẫu nội dung'}
         </button>
       </div>
 
@@ -2669,6 +2852,34 @@ const DataManagementView = ({
             </table>
           </div>
         )}
+
+        
+{activeTab === 'agents' && (
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100">
+                  <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tên Agent</th>
+                  <th className="px-8 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Thao tác</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {agents.length === 0 ? (
+                  <tr><td colSpan={2} className="px-8 py-12 text-center text-slate-400 italic">Chưa có Agent nào</td></tr>
+                ) : agents.map(a => (
+                  <tr key={a.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-8 py-4 text-sm font-bold text-slate-700">{a.name}</td>
+                    <td className="px-8 py-4 text-right space-x-2">
+                      <button onClick={() => onEditAgent(a)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Edit size={16} /></button>
+                      <button onClick={() => onDeleteAgent(a.id)} className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"><Trash2 size={16} /></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
 
         {activeTab === 'templates' && (
           <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
@@ -2839,15 +3050,15 @@ const KimberryView = ({
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Tháng/Năm</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Job</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Booking</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">HBL</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Line</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Cont 20</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Cont 40</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Sell</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center whitespace-nowrap">Thao tác</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Tháng/Năm</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Job</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Booking</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">HBL</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Line</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Cont 20</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Cont 40</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Sell</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center whitespace-nowrap">Thao tác</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -2859,15 +3070,15 @@ const KimberryView = ({
                 </tr>
               ) : filtered.map((j) => (
                 <tr key={j.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-6 py-4 text-sm font-medium text-slate-600 whitespace-nowrap">{j.monthYear}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-slate-800 whitespace-nowrap">{j.job}</td>
-                  <td className="px-6 py-4 text-sm text-slate-600 font-medium">{j.booking}</td>
-                  <td className="px-6 py-4 text-sm text-slate-600 font-medium">{j.hbl}</td>
-                  <td className="px-6 py-4 text-sm text-slate-600 font-medium">{j.line}</td>
-                  <td className="px-6 py-4 text-sm text-slate-600 font-medium text-right">{j.cont20}</td>
-                  <td className="px-6 py-4 text-sm text-slate-600 font-medium text-right">{j.cont40}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-emerald-600 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(j.sell)}</td>
-                  <td className="px-6 py-4">
+                  <td className="px-2 py-3 text-sm font-medium text-slate-600 whitespace-nowrap">{j.monthYear}</td>
+                  <td className="px-2 py-3 text-sm font-bold text-slate-800 whitespace-nowrap">{j.job}</td>
+                  <td className="px-2 py-3 text-sm text-slate-600 font-medium">{j.booking}</td>
+                  <td className="px-2 py-3 text-sm text-slate-600 font-medium">{j.hbl}</td>
+                  <td className="px-2 py-3 text-sm text-slate-600 font-medium">{j.line}</td>
+                  <td className="px-2 py-3 text-sm text-slate-600 font-medium text-right">{j.cont20}</td>
+                  <td className="px-2 py-3 text-sm text-slate-600 font-medium text-right">{j.cont40}</td>
+                  <td className="px-2 py-3 text-sm font-bold text-emerald-600 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(j.sell)}</td>
+                  <td className="px-2 py-3">
                     <div className="flex items-center justify-center gap-2">
                       <button 
                         onClick={() => handleOpenModal(j)}
@@ -3127,25 +3338,25 @@ const BalanceView = ({
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Tháng</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Kimberry TCB</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Long Hoàng MB</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">DNTT KIM</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">VAT thu KIM</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Trả MB</th>
-                  <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center whitespace-nowrap">Thao tác</th>
+                  <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Tháng</th>
+                  <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Kimberry TCB</th>
+                  <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Long Hoàng MB</th>
+                  <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">DNTT KIM</th>
+                  <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">VAT thu KIM</th>
+                  <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Trả MB</th>
+                  <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center whitespace-nowrap">Thao tác</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {months.map(m => (
                   <tr key={m.month} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-6 py-4 text-sm font-bold text-slate-800 whitespace-nowrap">Tháng {m.month}</td>
-                    <td className="px-6 py-4 text-sm font-bold text-blue-600 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(m.tcbTotal)}</td>
-                    <td className="px-6 py-4 text-sm font-bold text-indigo-600 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(m.mbTotal)}</td>
-                    <td className="px-6 py-4 text-sm font-bold text-emerald-600 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(m.dnttKim)}</td>
-                    <td className="px-6 py-4 text-sm font-bold text-rose-600 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(m.vatKim)}</td>
-                    <td className="px-6 py-4 text-sm font-bold text-slate-900 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(m.traMB)}</td>
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-2 py-3 text-sm font-bold text-slate-800 whitespace-nowrap">Tháng {m.month}</td>
+                    <td className="px-2 py-3 text-sm font-bold text-blue-600 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(m.tcbTotal)}</td>
+                    <td className="px-2 py-3 text-sm font-bold text-indigo-600 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(m.mbTotal)}</td>
+                    <td className="px-2 py-3 text-sm font-bold text-emerald-600 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(m.dnttKim)}</td>
+                    <td className="px-2 py-3 text-sm font-bold text-rose-600 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(m.vatKim)}</td>
+                    <td className="px-2 py-3 text-sm font-bold text-slate-900 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(m.traMB)}</td>
+                    <td className="px-2 py-3 text-center">
                        <button onClick={() => handleOpenVatModal(m.monthYear)} className="text-xs font-bold text-white bg-slate-800 px-3 py-1.5 rounded-lg hover:bg-slate-700 transition">Nhập VAT</button>
                     </td>
                   </tr>
@@ -3204,10 +3415,10 @@ const BalanceView = ({
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Ngày</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Số tiền</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest w-full">Nội dung</th>
-                <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center whitespace-nowrap">Thao tác</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest whitespace-nowrap">Ngày</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-right whitespace-nowrap">Số tiền</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest w-full">Nội dung</th>
+                <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center whitespace-nowrap">Thao tác</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -3219,10 +3430,10 @@ const BalanceView = ({
                 </tr>
               ) : list.map((t) => (
                 <tr key={t.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-6 py-4 text-sm font-medium text-slate-600 whitespace-nowrap">{formatDateDDMMYYYY(t.date)}</td>
-                  <td className="px-6 py-4 text-sm font-bold text-slate-800 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(t.amount)}</td>
-                  <td className="px-6 py-4 text-sm text-slate-600">{t.description}</td>
-                  <td className="px-6 py-4">
+                  <td className="px-2 py-3 text-sm font-medium text-slate-600 whitespace-nowrap">{formatDateDDMMYYYY(t.date)}</td>
+                  <td className="px-2 py-3 text-sm font-bold text-slate-800 text-right whitespace-nowrap">{new Intl.NumberFormat('vi-VN').format(t.amount)}</td>
+                  <td className="px-2 py-3 text-sm text-slate-600">{t.description}</td>
+                  <td className="px-2 py-3">
                     <div className="flex items-center justify-center gap-2">
                       <button onClick={() => handleOpenTxModal(t)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"><Eye size={16} /></button>
                       <button onClick={() => onDeleteTransaction(t.id)} className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"><X size={16} /></button>
@@ -3776,14 +3987,14 @@ const LeaveManagementView = ({
                 return (
                   <tr key={emp.id} className="hover:bg-slate-50/50 transition-colors">
                     <td className="px-4 py-4 text-sm font-medium text-slate-500 text-center border-r border-slate-100 bg-slate-50">{idx + 1}</td>
-                    <td className="px-6 py-4 text-sm font-bold text-slate-800 border-r border-slate-100 whitespace-nowrap">{emp.name}</td>
-                    <td className="px-6 py-4 text-sm text-slate-600 border-r border-slate-100 whitespace-nowrap">{emp.position || emp.role}</td>
-                    <td className="px-6 py-4 text-sm font-bold text-slate-800 text-center border-r border-slate-100">
+                    <td className="px-2 py-3 text-sm font-bold text-slate-800 border-r border-slate-100 whitespace-nowrap">{emp.name}</td>
+                    <td className="px-2 py-3 text-sm text-slate-600 border-r border-slate-100 whitespace-nowrap">{emp.position || emp.role}</td>
+                    <td className="px-2 py-3 text-sm font-bold text-slate-800 text-center border-r border-slate-100">
                       <span className={cn("px-3 py-1 rounded-full", leaveDays > 0 ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-600")}>
                         {leaveDays} ngày
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-2 py-3 text-center">
                       <button 
                         onClick={() => setSelectedEmployee(emp)}
                         disabled={records.length === 0}
@@ -4433,7 +4644,7 @@ const FreightsView = ({ username }: { username: string }) => {
          </div>
       </div>
 
-      <div className="bg-[#f8fafc] mx-[-24px] px-6 py-4 flex flex-wrap items-center gap-4">
+      <div className="bg-[#f8fafc] mx-[-24px] px-2 py-3 flex flex-wrap items-center gap-4">
         <div className="flex-1 min-w-[200px] bg-white rounded flex items-center px-3 py-2 border border-slate-200 shadow-sm">
           <Search size={16} className="text-slate-400 mr-2" />
           <input type="text" placeholder="Nhà cung cấp" className="w-full outline-none text-sm bg-transparent" />
@@ -4601,7 +4812,7 @@ const LocalChargesView = () => {
          </div>
       </div>
 
-      <div className="bg-[#f8fafc] mx-[-24px] px-6 py-4 border-b border-gray-200">
+      <div className="bg-[#f8fafc] mx-[-24px] px-2 py-3 border-b border-gray-200">
         <div className="flex items-center gap-4 max-w-sm bg-white rounded px-3 py-2 border border-slate-200 shadow-sm">
           <Search size={16} className="text-slate-400" />
           <input type="text" placeholder="Search" className="w-full outline-none text-sm bg-transparent" />
@@ -4706,7 +4917,7 @@ const ServicesView = () => {
          </div>
       </div>
 
-      <div className="bg-[#f8fafc] mx-[-24px] px-6 py-4 border-b border-gray-200">
+      <div className="bg-[#f8fafc] mx-[-24px] px-2 py-3 border-b border-gray-200">
         <div className="flex items-center gap-4 max-w-sm bg-white rounded px-3 py-2 border border-slate-200 shadow-sm">
           <Search size={16} className="text-slate-400" />
           <input type="text" placeholder="Search" className="w-full outline-none text-sm bg-transparent" />
@@ -4841,7 +5052,7 @@ const CustomChargeView = () => {
          </div>
       </div>
 
-      <div className="bg-[#f8fafc] mx-[-24px] px-6 py-4 border-b border-gray-200">
+      <div className="bg-[#f8fafc] mx-[-24px] px-2 py-3 border-b border-gray-200">
         <div className="flex items-center gap-4 max-w-sm bg-white rounded px-3 py-2 border border-slate-200 shadow-sm">
           <Search size={16} className="text-slate-400" />
           <input type="text" placeholder="Search" className="w-full outline-none text-sm bg-transparent" />
@@ -5076,29 +5287,29 @@ const EmployeeManagementView = ({
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-100">
-              <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Họ tên</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Chức vụ</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Name</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Email</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Sđt</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Line</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">STK</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Ngân hàng</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Thao tác</th>
+              <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Họ tên</th>
+              <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Chức vụ</th>
+              <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Name</th>
+              <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Email</th>
+              <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Sđt</th>
+              <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Line</th>
+              <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">STK</th>
+              <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Ngân hàng</th>
+              <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Thao tác</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
             {employees.map((emp) => (
               <tr key={emp.id} className="hover:bg-slate-50/50 transition-colors">
-                <td className="px-6 py-4 text-sm font-bold text-slate-800">{emp.fullName}</td>
-                <td className="px-6 py-4 text-sm text-slate-600 font-medium">{emp.position}</td>
-                <td className="px-6 py-4 text-sm text-slate-600 font-medium">{emp.name}</td>
-                <td className="px-6 py-4 text-sm text-slate-600 font-medium">{emp.email}</td>
-                <td className="px-6 py-4 text-sm text-slate-600 font-medium">{emp.phone}</td>
-                <td className="px-6 py-4 text-sm text-slate-600 font-medium">{emp.line}</td>
-                <td className="px-6 py-4 text-sm text-slate-600 font-medium">{emp.accountNumber}</td>
-                <td className="px-6 py-4 text-sm text-slate-600 font-medium">{emp.bankName}</td>
-                <td className="px-6 py-4">
+                <td className="px-2 py-3 text-sm font-bold text-slate-800">{emp.fullName}</td>
+                <td className="px-2 py-3 text-sm text-slate-600 font-medium">{emp.position}</td>
+                <td className="px-2 py-3 text-sm text-slate-600 font-medium">{emp.name}</td>
+                <td className="px-2 py-3 text-sm text-slate-600 font-medium">{emp.email}</td>
+                <td className="px-2 py-3 text-sm text-slate-600 font-medium">{emp.phone}</td>
+                <td className="px-2 py-3 text-sm text-slate-600 font-medium">{emp.line}</td>
+                <td className="px-2 py-3 text-sm text-slate-600 font-medium">{emp.accountNumber}</td>
+                <td className="px-2 py-3 text-sm text-slate-600 font-medium">{emp.bankName}</td>
+                <td className="px-2 py-3">
                   <div className="flex items-center justify-center gap-2">
                     <button 
                       onClick={() => onEdit(emp)}
@@ -5151,15 +5362,15 @@ const ExpenseCategoryManagementView = ({
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="bg-slate-50 border-b border-slate-100">
-              <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Loại chi phí</th>
-              <th className="px-6 py-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Thao tác</th>
+              <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest">Loại chi phí</th>
+              <th className="px-2 py-3 text-[10px] font-bold text-slate-500 uppercase tracking-widest text-center">Thao tác</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
             {categories.map((cat) => (
               <tr key={cat.id} className="hover:bg-slate-50/50 transition-colors">
-                <td className="px-6 py-4 text-sm font-bold text-slate-800">{cat.name}</td>
-                <td className="px-6 py-4">
+                <td className="px-2 py-3 text-sm font-bold text-slate-800">{cat.name}</td>
+                <td className="px-2 py-3">
                   <div className="flex items-center justify-center gap-2">
                     <button 
                       onClick={() => onEdit(cat)}
