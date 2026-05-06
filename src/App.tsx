@@ -611,6 +611,18 @@ export default function App() {
     }
   };
 
+  const handleBulkDeleteKimberryJobs = async (ids: string[]) => {
+    try {
+      const batch = writeBatch(db);
+      for (const id of ids) {
+        batch.delete(doc(db, 'kimberryJobs', id));
+      }
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'kimberryJobs - bulk');
+    }
+  };
+
   const handleEditKimberryJob = async (j: KimberryJob) => {
     try {
       const { id, ...rest } = j;
@@ -1063,6 +1075,7 @@ export default function App() {
               jobs={kimberryJobs}
               onAddJob={handleAddKimberryJob}
               onBulkAddJobs={handleBulkAddKimberryJobs}
+              onBulkDeleteJobs={handleBulkDeleteKimberryJobs}
               onEditJob={handleEditKimberryJob}
               onDeleteJob={handleDeleteKimberryJob}
             />
@@ -2558,7 +2571,7 @@ const ImportExcelModal = ({
 }: { 
   isOpen: boolean, 
   onClose: () => void, 
-  onImport: (data: any[], fileName: string) => void,
+  onImport: (data: any[], fileName: string, rawData?: any[][]) => void,
   onDownloadTemplate: () => void,
   history: ImportHistoryItem[]
 }) => {
@@ -2606,7 +2619,8 @@ const ImportExcelModal = ({
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         const data = XLSX.utils.sheet_to_json(worksheet);
-        onImport(data, file.name);
+        const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        onImport(data, file.name, rawData as any[][]);
         setFile(null);
       } catch (error) {
         alert('Lỗi khi đọc file Excel. Vui lòng kiểm tra lại định dạng file.');
@@ -2957,16 +2971,20 @@ const KimberryView = ({
   jobs,
   onAddJob,
   onBulkAddJobs,
+  onBulkDeleteJobs,
   onEditJob,
   onDeleteJob,
 }: {
   jobs: KimberryJob[];
   onAddJob: (j: Omit<KimberryJob, 'id'>) => void;
   onBulkAddJobs?: (jobs: Omit<KimberryJob, 'id'>[]) => void;
+  onBulkDeleteJobs?: (ids: string[]) => Promise<void>;
   onEditJob: (j: KimberryJob) => void;
   onDeleteJob: (id: string) => void;
 }) => {
   const [filterMonth, setFilterMonth] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importHistory, setImportHistory] = useState<any[]>([]);
@@ -3094,13 +3112,23 @@ const KimberryView = ({
             return;
         }
 
+        // 1. Clear old jobs that belong to the specified year
+        const jobsToDelete = jobs.filter(j => j.monthYear.startsWith(yearStr)).map(j => j.id);
+        if (jobsToDelete.length > 0 && onBulkDeleteJobs) {
+          await onBulkDeleteJobs(jobsToDelete);
+        } else {
+          // If bulk delete is not provided, fallback to individual deletions
+          jobsToDelete.forEach(onDeleteJob);
+        }
+
+        // 2. Add new jobs
         if (onBulkAddJobs) {
             onBulkAddJobs(formattedData);
         } else {
             formattedData.forEach(onAddJob);
         }
         
-        alert(`Đồng bộ dữ liệu thành công! Lấy được ${formattedData.length} Jobs của năm ${yearStr}.`);
+        alert(`Đồng bộ dữ liệu thành công! Đã xoá ${jobsToDelete.length} Jobs cũ và thêm ${formattedData.length} Jobs mới của năm ${yearStr}.`);
     } catch (error) {
         console.error("Lỗi khi đồng bộ:", error);
         alert("Đồng bộ thất bại, hãy kiểm tra lại kết nối API!");
@@ -3147,7 +3175,30 @@ const KimberryView = ({
     setIsModalOpen(false);
   };
 
-  const filtered = jobs.filter(j => !filterMonth || j.monthYear === filterMonth);
+  const jobsRef = useRef(jobs);
+  useEffect(() => {
+    jobsRef.current = jobs;
+  }, [jobs]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterMonth]);
+
+  const sortedFiltered = [...jobs]
+    .filter(j => !filterMonth || j.monthYear === filterMonth)
+    .sort((a, b) => {
+      if (a.monthYear < b.monthYear) return 1;
+      if (a.monthYear > b.monthYear) return -1;
+      return a.id.localeCompare(b.id);
+    });
+
+
+  const totalPages = Math.ceil(sortedFiltered.length / ITEMS_PER_PAGE) || 1;
+  const displayJobs = sortedFiltered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
+  const totalCont20 = sortedFiltered.reduce((sum, j) => sum + j.cont20, 0);
+  const totalCont40 = sortedFiltered.reduce((sum, j) => sum + j.cont40, 0);
+  const totalSell = sortedFiltered.reduce((sum, j) => sum + j.sell, 0);
 
   return (
     <div className="space-y-6">
@@ -3161,20 +3212,6 @@ const KimberryView = ({
           >
             <RefreshCw size={16} className={isSyncing ? "animate-spin" : ""} />
             {isSyncing ? "Đang đồng bộ..." : "Đồng bộ Web"}
-          </button>
-          <button 
-            onClick={() => setIsImportModalOpen(true)}
-            className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
-          >
-            <Upload size={16} />
-            Import (Excel)
-          </button>
-          <button 
-            onClick={handleExportExcel}
-            className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
-          >
-            <Download size={16} />
-            Export (Excel)
           </button>
           <button 
             onClick={() => handleOpenModal()}
@@ -3223,13 +3260,13 @@ const KimberryView = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.length === 0 ? (
+              {displayJobs.length === 0 ? (
                 <tr>
                   <td colSpan={9} className="px-6 py-12 text-center text-slate-400 italic font-medium text-sm">
                     Chưa có job nào
                   </td>
                 </tr>
-              ) : filtered.map((j) => (
+              ) : displayJobs.map((j) => (
                 <tr key={j.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-2 py-3 text-sm font-medium text-slate-600 whitespace-nowrap">{j.monthYear}</td>
                   <td className="px-2 py-3 text-sm font-bold text-slate-800 whitespace-nowrap">{j.job}</td>
@@ -3258,8 +3295,46 @@ const KimberryView = ({
                 </tr>
               ))}
             </tbody>
+            {sortedFiltered.length > 0 && (
+              <tfoot className="bg-slate-50 border-t border-slate-200">
+                <tr>
+                  <td colSpan={5} className="px-2 py-4 text-xs font-bold text-slate-700 text-right uppercase tracking-wider">
+                    Tổng cộng:
+                  </td>
+                  <td className="px-2 py-4 text-sm font-bold text-slate-800 text-right">{totalCont20}</td>
+                  <td className="px-2 py-4 text-sm font-bold text-slate-800 text-right">{totalCont40}</td>
+                  <td className="px-2 py-4 text-sm font-bold text-emerald-700 text-right whitespace-nowrap">
+                    {new Intl.NumberFormat('vi-VN').format(totalSell)}
+                  </td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
+        {totalPages > 1 && (
+          <div className="border-t border-slate-100 p-4 flex items-center justify-between">
+            <div className="text-sm text-slate-500 font-medium">
+              Trang {currentPage} / {totalPages}
+            </div>
+            <div className="flex items-center flex-wrap gap-1 justify-end">
+              <button 
+                onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))} 
+                disabled={currentPage === 1}
+                className="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-lg disabled:opacity-50 transition-colors"
+              >
+                Trước
+              </button>
+              <button 
+                onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))} 
+                disabled={currentPage === totalPages}
+                className="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-lg disabled:opacity-50 transition-colors"
+              >
+                Sau
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Write transaction modal */}
@@ -3440,15 +3515,49 @@ const BalanceView = ({
     XLSX.writeFile(workbook, `BankTransactions_${activeTab}.xlsx`);
   };
 
-  const handleImportExcel = (data: any[], fileName: string) => {
-    const batch = data.map(item => {
-      let date = item['Ngày (YYYY-MM-DD)'] || item['Ngày'] || new Date().toISOString().split('T')[0];
-      let bank = String(item['Ngân hàng'] || 'TCB').trim().toUpperCase();
+  const handleImportExcel = (data: any[], fileName: string, rawData?: any[][]) => {
+    let finalData = data;
+
+    // Check if it's raw data without headers (e.g. 05/01/2026, 119534400, Thu tien...)
+    // A standard template has "Ngày" or "Ngân hàng" in the first row.
+    const isNoHeader = rawData && rawData.length > 0 && 
+       ((typeof rawData[0][0] === 'string' && !rawData[0][0].toLowerCase().includes('ngày') && !rawData[0][0].toLowerCase().includes('ngân hàng')) || 
+        typeof rawData[0][0] === 'number');
+
+    if (isNoHeader && rawData) {
+      finalData = rawData.filter(row => row.length >= 2).map((row) => {
+        return {
+          'Ngân hàng': activeTab === 'MB' ? 'MB' : 'TCB',
+          'Ngày (YYYY-MM-DD)': row[0],
+          'Số tiền': row[1],
+          'Diễn giải': row[2] || '',
+        };
+      });
+    }
+
+    const batch = finalData.map(item => {
+      let dateVal = item['Ngày (YYYY-MM-DD)'] || item['Ngày'] || new Date().toISOString().split('T')[0];
+      
+      // Attempt to parse DD/MM/YYYY into YYYY-MM-DD
+      if (typeof dateVal === 'string' && dateVal.includes('/')) {
+        const parts = dateVal.split('/');
+        if (parts.length === 3) {
+          if (parts[2].length === 4) {
+            dateVal = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+          }
+        }
+      } else if (typeof dateVal === 'number') {
+        // Handle Excel date serial format if rawData parses it as number
+        const jsDate = new Date(Math.round((dateVal - 25569)*86400*1000));
+        dateVal = jsDate.toISOString().split('T')[0];
+      }
+
+      let bank = String(item['Ngân hàng'] || activeTab).trim().toUpperCase();
       if (bank !== 'TCB' && bank !== 'MB') bank = 'TCB';
 
       return {
         bank: bank as 'TCB' | 'MB',
-        date: date,
+        date: dateVal,
         amount: Number(item['Số tiền']) || 0,
         description: String(item['Diễn giải'] || ''),
       };
