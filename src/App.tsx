@@ -700,6 +700,19 @@ export default function App() {
     }
   };
 
+  const handleBulkAddBankTransactions = async (transactions: Omit<BankTransaction, 'id'>[]) => {
+    try {
+      const batch = writeBatch(db);
+      for (const t of transactions) {
+        const docRef = doc(collection(db, 'bankTransactions'));
+        batch.set(docRef, t);
+      }
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'bankTransactions - bulk');
+    }
+  };
+
   const handleEditBankTransaction = async (t: BankTransaction) => {
     try {
       const { id, ...rest } = t;
@@ -1060,6 +1073,7 @@ export default function App() {
               vatRecords={vatRecords}
               kimberryJobs={kimberryJobs}
               onAddTransaction={handleAddBankTransaction}
+              onBulkAddTransactions={handleBulkAddBankTransactions}
               onEditTransaction={handleEditBankTransaction}
               onDeleteTransaction={handleDeleteBankTransaction}
               onUpdateVat={handleUpdateVat}
@@ -2954,6 +2968,8 @@ const KimberryView = ({
 }) => {
   const [filterMonth, setFilterMonth] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importHistory, setImportHistory] = useState<any[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [editItem, setEditItem] = useState<KimberryJob | undefined>();
   const [formData, setFormData] = useState<Omit<KimberryJob, 'id'>>({
@@ -2967,15 +2983,83 @@ const KimberryView = ({
     sell: 0,
   });
 
+  const handleDownloadTemplate = () => {
+    const worksheet = XLSX.utils.json_to_sheet([{
+      'Tháng/Năm (YYYY-MM)': '2026-04',
+      'Job': 'J-00123',
+      'Booking': 'BKG-789456',
+      'HBL': 'HBL-2304',
+      'Line': 'MCC',
+      'Cont20': 2,
+      'Cont40': 1,
+      'Sell (VNĐ)': 15000000
+    }]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
+    XLSX.writeFile(workbook, "Kimberry_Jobs_Template.xlsx");
+  };
+
+  const handleExportExcel = () => {
+    const dataToExport = jobs.map(j => ({
+      'Tháng/Năm': j.monthYear,
+      'Job': j.job,
+      'Booking': j.booking,
+      'HBL': j.hbl,
+      'Line': j.line,
+      'Cont20': j.cont20,
+      'Cont40': j.cont40,
+      'Sell': j.sell,
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Jobs");
+    XLSX.writeFile(workbook, "Kimberry_Jobs.xlsx");
+  };
+
+  const handleImportExcel = (data: any[], fileName: string) => {
+    const batch = data.map(item => {
+      let monthYear = item['Tháng/Năm (YYYY-MM)'] || item['Tháng/Năm'] || new Date().toISOString().slice(0, 7);
+      return {
+        monthYear,
+        job: String(item['Job'] || ''),
+        booking: String(item['Booking'] || ''),
+        hbl: String(item['HBL'] || ''),
+        line: String(item['Line'] || ''),
+        cont20: Number(item['Cont20']) || 0,
+        cont40: Number(item['Cont40']) || 0,
+        sell: Number(item['Sell (VNĐ)'] || item['Sell']) || 0,
+      };
+    });
+
+    if (onBulkAddJobs) {
+      onBulkAddJobs(batch);
+    } else {
+      batch.forEach(onAddJob);
+    }
+
+    setImportHistory(prev => [{
+      id: Date.now().toString(),
+      date: new Date().toISOString(),
+      fileName: fileName,
+      user: 'Admin'
+    }, ...prev]);
+
+    setIsImportModalOpen(false);
+  };
+
   const handleSyncLongHoang = async () => {
+    const savedApiUrl = localStorage.getItem('kimberry_sync_api_url') || "https://kimberry.id.vn/api/export/long-hoang-jobs";
+    const apiUrl = window.prompt("Nhập link API nguồn dữ liệu Logistics:", savedApiUrl);
+    
+    if (!apiUrl) return;
+    localStorage.setItem('kimberry_sync_api_url', apiUrl);
+
     const year = window.prompt("Nhập năm cần đồng bộ (VD: 2026):", new Date().getFullYear().toString());
     if (!year) return;
 
     setIsSyncing(true);
     try {
-        const API_URL = "https://ais-pre-p2gnfi4m7y3twgnivk7bhx-175776780599.asia-southeast1.run.app/api/export/long-hoang-jobs";
-        
-        const response = await fetch(API_URL);
+        const response = await fetch(apiUrl);
         
         if (!response.ok) {
             throw new Error(`Không thể kết nối đến máy chủ Logistic! (Status: ${response.status})`);
@@ -3083,14 +3167,14 @@ const KimberryView = ({
             {isSyncing ? "Đang đồng bộ..." : "Đồng bộ Web"}
           </button>
           <button 
-            onClick={() => alert('Chức năng upload excel đang được phát triển')}
+            onClick={() => setIsImportModalOpen(true)}
             className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
           >
             <Upload size={16} />
             Import (Excel)
           </button>
           <button 
-            onClick={() => alert('Chức năng export excel đang được phát triển')}
+            onClick={handleExportExcel}
             className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
           >
             <Download size={16} />
@@ -3304,6 +3388,7 @@ const BalanceView = ({
   vatRecords,
   kimberryJobs,
   onAddTransaction,
+  onBulkAddTransactions,
   onEditTransaction,
   onDeleteTransaction,
   onUpdateVat,
@@ -3312,6 +3397,7 @@ const BalanceView = ({
   vatRecords: VatRecord[];
   kimberryJobs: KimberryJob[];
   onAddTransaction: (t: Omit<BankTransaction, 'id'>) => void;
+  onBulkAddTransactions?: (t: Omit<BankTransaction, 'id'>[]) => void;
   onEditTransaction: (t: BankTransaction) => void;
   onDeleteTransaction: (id: string) => void;
   onUpdateVat: (r: VatRecord) => void;
@@ -3319,6 +3405,9 @@ const BalanceView = ({
   const [activeTab, setActiveTab] = useState<'summary' | 'TCB' | 'MB'>('summary');
   const [filterMonth, setFilterMonth] = useState(new Date().toISOString().slice(0, 7)); // YYYY-MM
   const [filterYear, setFilterYear] = useState(new Date().getFullYear().toString());
+
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [importHistory, setImportHistory] = useState<any[]>([]);
 
   const [isTxModalOpen, setIsTxModalOpen] = useState(false);
   const [editTx, setEditTx] = useState<BankTransaction | undefined>();
@@ -3328,6 +3417,62 @@ const BalanceView = ({
     amount: 0,
     description: '',
   });
+
+  const handleDownloadTemplate = () => {
+    const worksheet = XLSX.utils.json_to_sheet([{
+      'Ngân hàng': 'TCB',
+      'Ngày (YYYY-MM-DD)': '2026-04-15',
+      'Số tiền': 15000000,
+      'Diễn giải': 'Nhận tiền khách hàng'
+    }]);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
+    XLSX.writeFile(workbook, "Kimberry_Bank_Template.xlsx");
+  };
+
+  const handleExportExcel = () => {
+    const listToExport = activeTab === 'summary' ? transactions : transactions.filter(t => t.bank === activeTab);
+    const dataToExport = listToExport.map(t => ({
+      'Ngân hàng': t.bank,
+      'Ngày': t.date,
+      'Số tiền': t.amount,
+      'Diễn giải': t.description,
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Transactions");
+    XLSX.writeFile(workbook, `BankTransactions_${activeTab}.xlsx`);
+  };
+
+  const handleImportExcel = (data: any[], fileName: string) => {
+    const batch = data.map(item => {
+      let date = item['Ngày (YYYY-MM-DD)'] || item['Ngày'] || new Date().toISOString().split('T')[0];
+      let bank = String(item['Ngân hàng'] || 'TCB').trim().toUpperCase();
+      if (bank !== 'TCB' && bank !== 'MB') bank = 'TCB';
+
+      return {
+        bank: bank as 'TCB' | 'MB',
+        date: date,
+        amount: Number(item['Số tiền']) || 0,
+        description: String(item['Diễn giải'] || ''),
+      };
+    });
+
+    if (onBulkAddTransactions) {
+      onBulkAddTransactions(batch);
+    } else {
+      batch.forEach(onAddTransaction);
+    }
+
+    setImportHistory(prev => [{
+      id: Date.now().toString(),
+      date: new Date().toISOString(),
+      fileName: fileName,
+      user: 'Admin'
+    }, ...prev]);
+
+    setIsImportModalOpen(false);
+  };
 
   const [isVatModalOpen, setIsVatModalOpen] = useState(false);
   const [vatFormData, setVatFormData] = useState<VatRecord>({
@@ -3406,7 +3551,14 @@ const BalanceView = ({
             </div>
             <div className="flex mt-6 gap-2">
                <button 
-                onClick={() => alert('Chức năng export excel đang được phát triển')}
+                onClick={() => setIsImportModalOpen(true)}
+                className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
+              >
+                <Upload size={16} />
+                Import (Excel)
+              </button>
+               <button 
+                onClick={handleExportExcel}
                 className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
               >
                 <Download size={16} />
@@ -3468,14 +3620,14 @@ const BalanceView = ({
               </div>
               <div className="flex mt-6 gap-2">
                 <button 
-                  onClick={() => alert('Chức năng upload excel đang được phát triển')}
+                  onClick={() => setIsImportModalOpen(true)}
                   className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
                 >
                   <Upload size={16} />
                   Import
                 </button>
                 <button 
-                  onClick={() => alert('Chức năng export excel đang được phát triển')}
+                  onClick={handleExportExcel}
                   className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
                 >
                   <Download size={16} />
@@ -3658,6 +3810,14 @@ const BalanceView = ({
           </div>
         )}
       </AnimatePresence>
+
+      <ImportExcelModal 
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        onImport={handleImportExcel}
+        onDownloadTemplate={handleDownloadTemplate}
+        history={importHistory}
+      />
     </div>
   )
 }
