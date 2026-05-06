@@ -78,6 +78,7 @@ import {
   onSnapshot,
   getDocFromServer,
   addDoc,
+  writeBatch,
   serverTimestamp
 } from 'firebase/firestore';
 
@@ -597,6 +598,19 @@ export default function App() {
     }
   };
 
+  const handleBulkAddKimberryJobs = async (jobs: Omit<KimberryJob, 'id'>[]) => {
+    try {
+      const batch = writeBatch(db);
+      for (const j of jobs) {
+        const docRef = doc(collection(db, 'kimberryJobs'));
+        batch.set(docRef, j);
+      }
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'kimberryJobs - bulk');
+    }
+  };
+
   const handleEditKimberryJob = async (j: KimberryJob) => {
     try {
       const { id, ...rest } = j;
@@ -1035,6 +1049,7 @@ export default function App() {
             <KimberryView
               jobs={kimberryJobs}
               onAddJob={handleAddKimberryJob}
+              onBulkAddJobs={handleBulkAddKimberryJobs}
               onEditJob={handleEditKimberryJob}
               onDeleteJob={handleDeleteKimberryJob}
             />
@@ -2927,16 +2942,19 @@ const DataManagementView = ({
 const KimberryView = ({
   jobs,
   onAddJob,
+  onBulkAddJobs,
   onEditJob,
   onDeleteJob,
 }: {
   jobs: KimberryJob[];
   onAddJob: (j: Omit<KimberryJob, 'id'>) => void;
+  onBulkAddJobs?: (jobs: Omit<KimberryJob, 'id'>[]) => void;
   onEditJob: (j: KimberryJob) => void;
   onDeleteJob: (id: string) => void;
 }) => {
   const [filterMonth, setFilterMonth] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [editItem, setEditItem] = useState<KimberryJob | undefined>();
   const [formData, setFormData] = useState<Omit<KimberryJob, 'id'>>({
     monthYear: new Date().toISOString().slice(0, 7), // YYYY-MM
@@ -2948,6 +2966,68 @@ const KimberryView = ({
     cont40: 0,
     sell: 0,
   });
+
+  const handleSyncLongHoang = async () => {
+    const year = window.prompt("Nhập năm cần đồng bộ (VD: 2026):", new Date().getFullYear().toString());
+    if (!year) return;
+
+    setIsSyncing(true);
+    try {
+        const API_URL = "https://ais-pre-p2gnfi4m7y3twgnivk7bhx-175776780599.asia-southeast1.run.app/api/export/long-hoang-jobs";
+        
+        const response = await fetch(API_URL);
+        
+        if (!response.ok) {
+            throw new Error(`Không thể kết nối đến máy chủ Logistic! (Status: ${response.status})`);
+        }
+
+        const json = await response.json();
+        
+        if (json.success && json.data) {
+            const fetchedJobs = json.data;
+            const jobsToSync = fetchedJobs.filter((j: any) => j.monthYear && j.monthYear.includes(year)).map((j: any) => {
+              let formattedMonthYear = j.monthYear;
+              if (formattedMonthYear.includes('/')) {
+                const parts = formattedMonthYear.split('/');
+                if (parts.length === 2) {
+                  formattedMonthYear = `${parts[1]}-${parts[0]}`;
+                }
+              }
+
+              return {
+                monthYear: formattedMonthYear,
+                job: j.jobCode || j.job || '',
+                booking: j.booking || '',
+                hbl: j.hbl || '',
+                line: j.line || '',
+                cont20: Number(j.cont20) || 0,
+                cont40: Number(j.cont40) || 0,
+                sell: Number(j.sell) || 0,
+              };
+            });
+
+            if (jobsToSync.length === 0) {
+              alert(`Không tìm thấy dữ liệu nào cho năm ${year}`);
+              return;
+            }
+
+            if (onBulkAddJobs) {
+              onBulkAddJobs(jobsToSync);
+            } else {
+              jobsToSync.forEach(onAddJob);
+            }
+            
+            alert(`Đồng bộ dữ liệu thành công! Lấy được ${jobsToSync.length} Jobs của năm ${year}.`);
+        } else {
+            alert("Lỗi: Không đọc được dữ liệu JSON hợp lệ từ server.");
+        }
+    } catch (error) {
+        console.error("Lỗi đồng bộ API:", error);
+        alert("Lỗi khi kết nối đồng bộ: " + error);
+    } finally {
+        setIsSyncing(false);
+    }
+  };
 
   const handleOpenModal = (item?: KimberryJob) => {
     if (item) {
@@ -2995,11 +3075,12 @@ const KimberryView = ({
         <h2 className="text-2xl font-bold text-slate-900 italic">Kimberry Jobs</h2>
         <div className="flex flex-wrap items-center gap-2">
           <button 
-            onClick={() => alert('Chức năng đồng bộ đang được phát triển')}
-            className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
+            onClick={handleSyncLongHoang}
+            disabled={isSyncing}
+            className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 disabled:opacity-50 transition-colors shadow-sm"
           >
-            <RefreshCw size={16} />
-            Đồng bộ Web
+            <RefreshCw size={16} className={isSyncing ? "animate-spin" : ""} />
+            {isSyncing ? "Đang đồng bộ..." : "Đồng bộ Web"}
           </button>
           <button 
             onClick={() => alert('Chức năng upload excel đang được phát triển')}
