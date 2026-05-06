@@ -2571,7 +2571,7 @@ const ImportExcelModal = ({
 }: { 
   isOpen: boolean, 
   onClose: () => void, 
-  onImport: (data: any[], fileName: string, rawData?: any[][]) => void,
+  onImport: (data: any[], fileName: string) => void,
   onDownloadTemplate: () => void,
   history: ImportHistoryItem[]
 }) => {
@@ -2619,8 +2619,7 @@ const ImportExcelModal = ({
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         const data = XLSX.utils.sheet_to_json(worksheet);
-        const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-        onImport(data, file.name, rawData as any[][]);
+        onImport(data, file.name);
         setFile(null);
       } catch (error) {
         alert('Lỗi khi đọc file Excel. Vui lòng kiểm tra lại định dạng file.');
@@ -3175,11 +3174,6 @@ const KimberryView = ({
     setIsModalOpen(false);
   };
 
-  const jobsRef = useRef(jobs);
-  useEffect(() => {
-    jobsRef.current = jobs;
-  }, [jobs]);
-
   useEffect(() => {
     setCurrentPage(1);
   }, [filterMonth]);
@@ -3187,11 +3181,10 @@ const KimberryView = ({
   const sortedFiltered = [...jobs]
     .filter(j => !filterMonth || j.monthYear === filterMonth)
     .sort((a, b) => {
-      if (a.monthYear < b.monthYear) return 1;
-      if (a.monthYear > b.monthYear) return -1;
+      if (a.monthYear < b.monthYear) return -1;
+      if (a.monthYear > b.monthYear) return 1;
       return a.id.localeCompare(b.id);
     });
-
 
   const totalPages = Math.ceil(sortedFiltered.length / ITEMS_PER_PAGE) || 1;
   const displayJobs = sortedFiltered.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
@@ -3515,49 +3508,15 @@ const BalanceView = ({
     XLSX.writeFile(workbook, `BankTransactions_${activeTab}.xlsx`);
   };
 
-  const handleImportExcel = (data: any[], fileName: string, rawData?: any[][]) => {
-    let finalData = data;
-
-    // Check if it's raw data without headers (e.g. 05/01/2026, 119534400, Thu tien...)
-    // A standard template has "Ngày" or "Ngân hàng" in the first row.
-    const isNoHeader = rawData && rawData.length > 0 && 
-       ((typeof rawData[0][0] === 'string' && !rawData[0][0].toLowerCase().includes('ngày') && !rawData[0][0].toLowerCase().includes('ngân hàng')) || 
-        typeof rawData[0][0] === 'number');
-
-    if (isNoHeader && rawData) {
-      finalData = rawData.filter(row => row.length >= 2).map((row) => {
-        return {
-          'Ngân hàng': activeTab === 'MB' ? 'MB' : 'TCB',
-          'Ngày (YYYY-MM-DD)': row[0],
-          'Số tiền': row[1],
-          'Diễn giải': row[2] || '',
-        };
-      });
-    }
-
-    const batch = finalData.map(item => {
-      let dateVal = item['Ngày (YYYY-MM-DD)'] || item['Ngày'] || new Date().toISOString().split('T')[0];
-      
-      // Attempt to parse DD/MM/YYYY into YYYY-MM-DD
-      if (typeof dateVal === 'string' && dateVal.includes('/')) {
-        const parts = dateVal.split('/');
-        if (parts.length === 3) {
-          if (parts[2].length === 4) {
-            dateVal = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-          }
-        }
-      } else if (typeof dateVal === 'number') {
-        // Handle Excel date serial format if rawData parses it as number
-        const jsDate = new Date(Math.round((dateVal - 25569)*86400*1000));
-        dateVal = jsDate.toISOString().split('T')[0];
-      }
-
-      let bank = String(item['Ngân hàng'] || activeTab).trim().toUpperCase();
+  const handleImportExcel = (data: any[], fileName: string) => {
+    const batch = data.map(item => {
+      let date = item['Ngày (YYYY-MM-DD)'] || item['Ngày'] || new Date().toISOString().split('T')[0];
+      let bank = String(item['Ngân hàng'] || 'TCB').trim().toUpperCase();
       if (bank !== 'TCB' && bank !== 'MB') bank = 'TCB';
 
       return {
         bank: bank as 'TCB' | 'MB',
-        date: dateVal,
+        date: date,
         amount: Number(item['Số tiền']) || 0,
         description: String(item['Diễn giải'] || ''),
       };
