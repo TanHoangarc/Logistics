@@ -2018,6 +2018,7 @@ const CashBookView = ({
     setIsSyncing(true);
     try {
       const url = "https://docs.google.com/spreadsheets/d/1yMl4DMQM8YTj-0DH27yO8y_LTRMI6Sz4/export?format=xlsx";
+      
       const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
       
       let response;
@@ -2028,11 +2029,17 @@ const CashBookView = ({
       }
       
       if (!response || !response.ok) {
-         throw new Error("Không thể tải file từ Google Drive. Vui lòng kiểm tra quyền truy cập.");
+         throw new Error("Không thể kết nối tải file. Vui lòng kiểm tra lại đường truyền mạng.");
       }
       
       const arrayBuffer = await response.arrayBuffer();
-      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+      
+      let workbook;
+      try {
+        workbook = XLSX.read(arrayBuffer, { type: 'array' });
+      } catch(e) {
+        throw new Error("Dữ liệu tải về không phải file Excel. Vui lòng mở quyền chia sẻ file Google Drive thành: 'Bất kỳ ai có liên kết' (Anyone with the link can view).");
+      }
       const sheetName = workbook.SheetNames[0];
       const worksheet = workbook.Sheets[sheetName];
       const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
@@ -2055,25 +2062,28 @@ const CashBookView = ({
         let dateVal = row[0]; // Cột A
         if (!dateVal) continue;
         
-        // Parse date from Excel format
         let formattedDate = "";
-        if (typeof dateVal === 'number') {
-           const jsDate = new Date(Math.round((dateVal - 25569)*86400*1000));
-           if (!isNaN(jsDate.getTime())) {
-             formattedDate = jsDate.toISOString().split('T')[0];
-           }
-        } else if (typeof dateVal === 'string') {
-           if (dateVal.includes('/')) {
-             const parts = dateVal.split('/');
-             if (parts.length === 3) {
-               formattedDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+        try {
+          if (typeof dateVal === 'number') {
+             const jsDate = new Date(Math.round((dateVal - 25569)*86400*1000));
+             if (!isNaN(jsDate.getTime())) {
+               formattedDate = jsDate.toISOString().split('T')[0];
              }
-           } else {
-             const parsedDate = new Date(dateVal);
-             if (!isNaN(parsedDate.getTime())) {
-               formattedDate = parsedDate.toISOString().split('T')[0];
+          } else if (typeof dateVal === 'string') {
+             if (dateVal.includes('/')) {
+               const parts = dateVal.split('/');
+               if (parts.length === 3) {
+                 formattedDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+               }
+             } else {
+               const parsedDate = new Date(dateVal);
+               if (!isNaN(parsedDate.getTime())) {
+                 formattedDate = parsedDate.toISOString().split('T')[0];
+               }
              }
-           }
+          }
+        } catch(e) {
+          continue;
         }
         
         if (formattedDate !== syncDateStr) continue;
@@ -2097,15 +2107,14 @@ const CashBookView = ({
         importedCount++;
       }
       
-      if (newTransactions.length > 0 || onBulkDeleteTransactions) {
-        // Delete all transactions on that date
-        const txToDelete = transactions.filter(t => t.date === syncDateStr).map(t => t.id);
-        if (txToDelete.length > 0 && onBulkDeleteTransactions) {
-          await onBulkDeleteTransactions(txToDelete);
-        }
+      const txToDelete = transactions.filter(t => t.date === syncDateStr).map(t => t.id);
+      if (txToDelete.length > 0 && onBulkDeleteTransactions) {
+        await onBulkDeleteTransactions(txToDelete);
+      }
 
-        if (newTransactions.length > 0) {
-          onBulkAddTransactions(newTransactions);
+      if (newTransactions.length > 0) {
+        if (onBulkAddTransactions) {
+           onBulkAddTransactions(newTransactions);
         }
         alert(`Đã xóa ${txToDelete.length} chứng từ cũ và đồng bộ thành công ${newTransactions.length} chứng từ mới cho ngày ${syncDateStr}.`);
       } else {
@@ -2114,7 +2123,7 @@ const CashBookView = ({
       
     } catch (error) {
        console.error("Lỗi đồng bộ:", error);
-       alert("Lỗi đồng bộ: " + error);
+       alert("Lỗi đồng bộ: " + (error instanceof Error ? error.message : String(error)));
     } finally {
        setIsSyncing(false);
     }
