@@ -999,13 +999,24 @@ export default function App() {
     }
   };
 
-  const handleDeleteCashTransaction = async (id: string) => {
-    if (confirm('Xác nhận xóa chứng từ này?')) {
+  const handleDeleteCashTransaction = async (id: string, skipConfirm = false) => {
+    if (skipConfirm || confirm('Xác nhận xóa chứng từ này?')) {
       try {
         await deleteDoc(doc(db, 'cashTransactions', id));
       } catch (error) {
         handleFirestoreError(error, OperationType.DELETE, 'cashTransactions');
       }
+    }
+  };
+
+  const handleBulkDeleteCashTransactions = async (ids: string[]) => {
+    try {
+      // Basic loop delete since WriteBatch would have a limit of 500, but loop is fine here.
+      for (const id of ids) {
+        await deleteDoc(doc(db, 'cashTransactions', id));
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'cashTransactions');
     }
   };
 
@@ -1048,6 +1059,7 @@ export default function App() {
               onAddAgentOrPayee={() => setIsPayeeModalOpen(true)}
               onAddTransaction={handleAddCashTransaction}
               onBulkAddTransactions={handleBulkAddCashTransactions}
+              onBulkDeleteTransactions={handleBulkDeleteCashTransactions}
               onEditTransaction={handleEditCashTransaction}
               onDeleteTransaction={handleDeleteCashTransaction}
               onUpdateInitialBalance={handleUpdateInitialBalance}
@@ -1887,6 +1899,7 @@ const CashBookView = ({
   descriptionTemplates,
   onAddTransaction,
   onBulkAddTransactions,
+  onBulkDeleteTransactions,
   onEditTransaction,
   onDeleteTransaction,
   onUpdateInitialBalance,
@@ -1904,9 +1917,10 @@ const CashBookView = ({
   descriptionTemplates: DescriptionTemplate[];
   onAddTransaction: (t: Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string }) => void;
   onBulkAddTransactions: (batch: (Omit<CashTransaction, 'id' | 'voucherNumber'> & { voucherNumber?: string })[]) => void;
+  onBulkDeleteTransactions?: (ids: string[]) => void;
   onEditTransaction: (t: CashTransaction) => void;
   onAddAgentOrPayee: () => void;
-  onDeleteTransaction: (id: string) => void;
+  onDeleteTransaction: (id: string, skipConfirm?: boolean) => void;
   onUpdateInitialBalance: (b: InitialBalanceInfo) => void;
 }) => {
   const [filterType, setFilterType] = useState<'all' | 'receipt' | 'payment'>('all');
@@ -1995,122 +2009,115 @@ const CashBookView = ({
     setIsSettingsOpen(false);
   };
 
-  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [importHistory, setImportHistory] = useState([
-    { id: '1', date: 'Mar 13, 2026 16:50:49', fileName: 'Import_Cash_Book_Q1.xlsx', user: 'TeddyDiem' },
-    { id: '2', date: 'Jan 21, 2026 14:47:46', fileName: 'Expenses_2025_Final.xlsx', user: 'IrisHuynh' },
-  ]);
+  const [isSyncing, setIsSyncing] = useState(false);
 
-  const handleDownloadTemplate = () => {
-    const templateData = [
-      { 'Ngày (YYYY-MM-DD)': '2024-05-20', 'Diễn giải': 'Thu tiền bán hàng', 'Đối tượng': 'Khách hàng A', 'Số tiền': 5000000, 'Loại (Thu/Chi)': 'Thu' },
-      { 'Ngày (YYYY-MM-DD)': '2024-05-21', 'Diễn giải': 'Thanh toán tiền điện', 'Đối tượng': 'EVN', 'Số tiền': 1200000, 'Loại (Thu/Chi)': 'Chi' },
-    ];
-    const worksheet = XLSX.utils.json_to_sheet(templateData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Template");
-    XLSX.writeFile(workbook, "Kimberry_CashBook_Template.xlsx");
-  };
+  const handleSyncGoogleSheets = async () => {
+    const syncDateStr = window.prompt("Nhập ngày cần đồng bộ (YYYY-MM-DD).\nChứng từ trong web của ngày này sẽ bị xóa và thay thế bằng dữ liệu từ Google Drive:", new Date().toISOString().split('T')[0]);
+    if (!syncDateStr) return;
 
-  const handleImportExcel = (data: any[], fileName: string) => {
-    const isV3Template = data[0] && (data[0]['Ngày'] !== undefined);
-
-    const batch = data.map(item => {
-      // Handle Date: Expects DD/MM/YYYY or YYYY-MM-DD
-      let dateVal = item['Ngày'] || item['Ngày (YYYY-MM-DD)'] || new Date().toISOString().split('T')[0];
-      if (typeof dateVal === 'string' && dateVal.includes('/')) {
-        const parts = dateVal.split('/');
-        if (parts.length === 3) {
-          // Convert DD/MM/YYYY to YYYY-MM-DD
-          if (parts[2].length === 4) {
-             dateVal = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
-          }
-        }
-      }
-
-      const thu = Number(item['Thu']) || 0;
-      const chi = Number(item['Chi']) || 0;
-      const amount = thu > 0 ? thu : chi;
-      const type = thu > 0 ? 'receipt' : 'payment';
-      const voucherNum = item['Số chứng từ'] || item['Số phiếu'];
-
-      return {
-        date: dateVal,
-        voucherNumber: voucherNum,
-        description: item['Diễn giải'] || 'Import from Excel',
-        person: item['Đối tượng'] || '-',
-        amount: amount,
-        type: type as 'receipt' | 'payment'
-      };
-    });
-
-    // Use bulk add instead of loop
-    onBulkAddTransactions(batch);
-    
-    setImportHistory(prev => [
-      { id: Math.random().toString(36).substring(2, 9), date: new Date().toLocaleString(), fileName, user: 'Hoang Dan' },
-      ...prev.slice(0, 5)
-    ]);
-    
-    setIsImportModalOpen(false);
-    alert(`Đã import thành công ${batch.length} chứng từ.`);
-  };
-
-  const handleExportExcel = () => {
-    // Sort transactions properly before exporting
-    const sortedForExport = [...transactions].sort((a, b) => {
-      if (a.date !== b.date) return a.date.localeCompare(b.date);
-      if (a.createdAt && b.createdAt) return a.createdAt - b.createdAt;
-      const numA = parseInt((a.voucherNumber || '').replace(/\D/g, '')) || 0;
-      const numB = parseInt((b.voucherNumber || '').replace(/\D/g, '')) || 0;
-      if (numA !== numB) return numA - numB;
-      return a.id.localeCompare(b.id);
-    });
-
-    let runningBal = initialBalance.amount;
-    const dataToExport = sortedForExport.map(t => {
-      if (t.type === 'receipt') runningBal += t.amount;
-      else runningBal -= t.amount;
+    setIsSyncing(true);
+    try {
+      const url = "https://docs.google.com/spreadsheets/d/1yMl4DMQM8YTj-0DH27yO8y_LTRMI6Sz4/export?format=xlsx";
+      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
       
-      return {
-        'Ngày': formatDateDDMMYYYY(t.date),
-        'Số chứng từ': t.voucherNumber,
-        'Diễn giải': t.description,
-        'Đối tượng': t.person,
-        'Thu': t.type === 'receipt' ? t.amount : 0,
-        'Chi': t.type === 'payment' ? t.amount : 0,
-        'Số dư': runningBal
+      let response;
+      try {
+         response = await fetch(proxyUrl);
+      } catch (err) {
+         response = await fetch(url);
+      }
+      
+      if (!response || !response.ok) {
+         throw new Error("Không thể tải file từ Google Drive. Vui lòng kiểm tra quyền truy cập.");
+      }
+      
+      const arrayBuffer = await response.arrayBuffer();
+      const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const rawData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+      
+      const dataRows = rawData.slice(6);
+      
+      const cleanAmount = (val: any) => {
+        if (!val) return 0;
+        if (typeof val === 'number') return val;
+        const cleaned = String(val).replace(/[.,]/g, '');
+        return Number(cleaned) || 0;
       };
-    });
 
-    // Add initial balance row at top
-    dataToExport.unshift({
-      'Ngày': formatDateDDMMYYYY(initialBalance.date),
-      'Số chứng từ': '-',
-      'Diễn giải': 'Số dư đầu kỳ',
-      'Đối tượng': '-',
-      'Thu': initialBalance.amount >= 0 ? initialBalance.amount : 0,
-      'Chi': initialBalance.amount < 0 ? Math.abs(initialBalance.amount) : 0,
-      'Số dư': initialBalance.amount
-    });
+      const newTransactions: any[] = [];
+      let importedCount = 0;
+      
+      for (const row of dataRows) {
+        if (!row || row.length < 5) continue;
+        
+        let dateVal = row[0]; // Cột A
+        if (!dateVal) continue;
+        
+        // Parse date from Excel format
+        let formattedDate = "";
+        if (typeof dateVal === 'number') {
+           const jsDate = new Date(Math.round((dateVal - 25569)*86400*1000));
+           if (!isNaN(jsDate.getTime())) {
+             formattedDate = jsDate.toISOString().split('T')[0];
+           }
+        } else if (typeof dateVal === 'string') {
+           if (dateVal.includes('/')) {
+             const parts = dateVal.split('/');
+             if (parts.length === 3) {
+               formattedDate = `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+             }
+           } else {
+             const parsedDate = new Date(dateVal);
+             if (!isNaN(parsedDate.getTime())) {
+               formattedDate = parsedDate.toISOString().split('T')[0];
+             }
+           }
+        }
+        
+        if (formattedDate !== syncDateStr) continue;
 
-    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "NhatKyChiTieu");
+        const description = String(row[4] || "").trim(); // Cột E
+        const person = String(row[10] || "-").trim(); // Cột K 
+        
+        const thu = cleanAmount(row[7]); // Cột H
+        const chi = cleanAmount(row[8]); // Cột I
+        const amount = thu > 0 ? thu : chi;
+        if (amount === 0) continue;
+        const type = thu > 0 ? 'receipt' : 'payment';
+        
+        newTransactions.push({
+           date: formattedDate,
+           description: description,
+           person: person,
+           amount: amount,
+           type: type as 'receipt' | 'payment'
+        });
+        importedCount++;
+      }
+      
+      if (newTransactions.length > 0 || onBulkDeleteTransactions) {
+        // Delete all transactions on that date
+        const txToDelete = transactions.filter(t => t.date === syncDateStr).map(t => t.id);
+        if (txToDelete.length > 0 && onBulkDeleteTransactions) {
+          await onBulkDeleteTransactions(txToDelete);
+        }
 
-    // Set column widths
-    const wscols = [
-      {wch: 12}, // Ngày
-      {wch: 15}, // Số chứng từ
-      {wch: 40}, // Diễn giải
-      {wch: 25}, // Đối tượng
-      {wch: 15}, // Thu
-      {wch: 15}, // Chi
-      {wch: 15}  // Số dư
-    ];
-    worksheet['!cols'] = wscols;
-
-    XLSX.writeFile(workbook, `Nhat_Ky_Chi_Tieu_${new Date().toISOString().split('T')[0]}.xlsx`);
+        if (newTransactions.length > 0) {
+          onBulkAddTransactions(newTransactions);
+        }
+        alert(`Đã xóa ${txToDelete.length} chứng từ cũ và đồng bộ thành công ${newTransactions.length} chứng từ mới cho ngày ${syncDateStr}.`);
+      } else {
+        alert(`Không có chứng từ nào trên file Excel cho ngày ${syncDateStr}.`);
+      }
+      
+    } catch (error) {
+       console.error("Lỗi đồng bộ:", error);
+       alert("Lỗi đồng bộ: " + error);
+    } finally {
+       setIsSyncing(false);
+    }
   };
 
   // Sort and calculate balance
@@ -2162,22 +2169,14 @@ const CashBookView = ({
             Cài đặt
           </button>
           {showImportExport && (
-            <>
-              <button 
-                onClick={() => setIsImportModalOpen(true)}
-                className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
-              >
-                <Upload size={16} />
-                Import (Excel)
-              </button>
-              <button 
-                onClick={handleExportExcel}
-                className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
-              >
-                <Download size={16} />
-                In Sổ (Excel)
-              </button>
-            </>
+            <button 
+              onClick={handleSyncGoogleSheets}
+              disabled={isSyncing}
+              className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm disabled:opacity-50"
+            >
+              <RefreshCw size={16} className={isSyncing ? "animate-spin" : ""} />
+              Đồng bộ dữ liệu
+            </button>
           )}
           <div className="relative group">
             <button 
@@ -2543,14 +2542,6 @@ const CashBookView = ({
           </div>
         )}
       </AnimatePresence>
-
-      <ImportExcelModal 
-        isOpen={isImportModalOpen}
-        onClose={() => setIsImportModalOpen(false)}
-        onImport={handleImportExcel}
-        onDownloadTemplate={handleDownloadTemplate}
-        history={importHistory}
-      />
     </div>
   );
 };
@@ -3549,7 +3540,11 @@ const BalanceView = ({
       } else if (typeof dateVal === 'number') {
         // Handle Excel date serial format if rawData parses it as number
         const jsDate = new Date(Math.round((dateVal - 25569)*86400*1000));
-        dateVal = jsDate.toISOString().split('T')[0];
+        if (!isNaN(jsDate.getTime())) {
+          dateVal = jsDate.toISOString().split('T')[0];
+        } else {
+          dateVal = new Date().toISOString().split('T')[0];
+        }
       }
 
       let bank = String(item['Ngân hàng'] || activeTab).trim().toUpperCase();
